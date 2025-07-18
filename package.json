@@ -1,0 +1,26 @@
+{
+  "name": "bot-of-doom",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "deploy": "bun run src/deploy.ts",
+    "reset-db": "bun scripts/reset-db.ts",
+    "reset-db:init": "bun scripts/reset-db.ts --init"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^24.0.14"
+  },
+  "peerDependencies": {
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "discord.js": "^14.21.0",
+    "sequelize": "^6.37.7",
+    "sqlite3": "^5.1.7",
+    "unicode-emoji-json": "^0.8.0"
+  }
+}

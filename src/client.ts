@@ -1,0 +1,19 @@
+import { Client, Collection, GatewayIntentBits } from "discord.js";
+
+declare module "discord.js" {
+  interface Client {
+    commands: Collection<string, any>;
+  }
+}
+
+export const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates,
+  ],
+});
+
+// Initialize the commands collection
+client.commands = new Collection<string, any>();
