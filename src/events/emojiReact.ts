@@ -24,13 +24,13 @@ export async function execute(message: Message) {
 
   if (Math.random() < 3 / 100) {
     try {
-      const randomEmojis = getRandomEmojis(15);
+      const randomEmojis = getRandomEmojis(14);
 
       // Add reactions one by one to avoid rate limits
       for (const emoji of randomEmojis) {
         await message.react(emoji);
         // Small delay to avoid hitting rate limits
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 350));
       }
     } catch (error) {
       console.error("Error adding emoji reactions:", error);
