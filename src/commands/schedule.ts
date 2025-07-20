@@ -260,6 +260,7 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
+      timeZone: "America/New_York",
       timeZoneName: "short",
     });
 
@@ -287,6 +288,45 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
   }
 }
 
+// Helper functions for Eastern timezone handling (EST/EDT)
+function getEasternDate(date?: Date): Date {
+  const targetDate = date || new Date();
+  // Get the current time in Eastern timezone
+  const easternTimeString = targetDate.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+  });
+  return new Date(easternTimeString);
+}
+
+function createEasternDate(localDate: Date): Date {
+  // Create a date that represents the local time but interpreted as Eastern time
+  const year = localDate.getFullYear();
+  const month = localDate.getMonth() + 1;
+  const day = localDate.getDate();
+  const hours = localDate.getHours();
+  const minutes = localDate.getMinutes();
+  const seconds = localDate.getSeconds();
+
+  // Create a date string and then convert it to Eastern time
+  const dateString = `${year}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")} ${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+
+  // Parse the date string as if it were in Eastern time
+  const tempDate = new Date(dateString);
+  const easternOffset = getEasternOffset(tempDate);
+
+  // Adjust for timezone offset
+  return new Date(tempDate.getTime() - easternOffset);
+}
+
+function getEasternOffset(date: Date): number {
+  // Get the timezone offset for Eastern time at the given date
+  const easternDate = new Date(
+    date.toLocaleString("en-US", { timeZone: "America/New_York" }),
+  );
+  const utcDate = new Date(date.toLocaleString("en-US", { timeZone: "UTC" }));
+  return utcDate.getTime() - easternDate.getTime();
+}
+
 const relativeRegex =
   /(?:(\d+)\s*d(?:ays?)?)?\s*(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?)?)?)?\s*(?:(\d+)\s*s(?:ec(?:onds?)?)?)?/i;
 
@@ -302,7 +342,8 @@ function parseRelativeTime(rel: string): number | null {
 }
 
 function parseTime(input: string): Date | null {
-  const now = new Date();
+  // Get current time in Eastern timezone
+  const now = getEasternDate();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   // Remove extra whitespace and convert to lowercase
@@ -340,7 +381,7 @@ function parseTime(input: string): Date | null {
       const timeOnly = parseTimeOnly(timeString);
       if (timeOnly) {
         tomorrow.setHours(timeOnly.hours, timeOnly.minutes, 0, 0);
-        return tomorrow;
+        return createEasternDate(tomorrow);
       }
     }
 
@@ -394,7 +435,8 @@ function parseTime(input: string): Date | null {
           if (ampm === "am" && hours === 12) hours = 0;
         }
 
-        return new Date(year, month - 1, day, hours, minutes ?? 0, 0, 0);
+        const date = new Date(year, month - 1, day, hours, minutes ?? 0, 0, 0);
+        return createEasternDate(date);
       }
     }
 
@@ -403,13 +445,14 @@ function parseTime(input: string): Date | null {
     if (timeOnly) {
       const result = new Date(today);
       result.setHours(timeOnly.hours, timeOnly.minutes, 0, 0);
+      const estResult = createEasternDate(result);
 
       // If the time has already passed today, schedule for tomorrow
-      if (result <= now) {
-        result.setDate(result.getDate() + 1);
+      if (estResult <= now) {
+        estResult.setDate(estResult.getDate() + 1);
       }
 
-      return result;
+      return estResult;
     }
 
     // Try parsing as a natural language date

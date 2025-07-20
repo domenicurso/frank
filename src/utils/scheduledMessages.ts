@@ -152,12 +152,17 @@ export function formatScheduledTime(date: Date): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "America/New_York",
     timeZoneName: "short",
   });
 }
 
 export function getTimeUntilScheduled(scheduledTime: Date): string {
-  const now = new Date();
+  // Get current time in Eastern timezone
+  const easternTimeString = new Date().toLocaleString("en-US", {
+    timeZone: "America/New_York",
+  });
+  const now = new Date(easternTimeString);
   const diff = scheduledTime.getTime() - now.getTime();
 
   if (diff <= 0) {
