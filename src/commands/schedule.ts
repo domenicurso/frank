@@ -289,42 +289,49 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
 }
 
 // Helper functions for Eastern timezone handling (EST/EDT)
-function getEasternDate(date?: Date): Date {
-  const targetDate = date || new Date();
-  // Get the current time in Eastern timezone
-  const easternTimeString = targetDate.toLocaleString("en-US", {
-    timeZone: "America/New_York",
-  });
-  return new Date(easternTimeString);
-}
-
-function createEasternDate(localDate: Date): Date {
-  // Create a date that represents the local time but interpreted as Eastern time
-  const year = localDate.getFullYear();
-  const month = localDate.getMonth() + 1;
-  const day = localDate.getDate();
-  const hours = localDate.getHours();
-  const minutes = localDate.getMinutes();
-  const seconds = localDate.getSeconds();
-
-  // Create a date string and then convert it to Eastern time
-  const dateString = `${year}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")} ${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-
-  // Parse the date string as if it were in Eastern time
-  const tempDate = new Date(dateString);
-  const easternOffset = getEasternOffset(tempDate);
-
-  // Adjust for timezone offset
-  return new Date(tempDate.getTime() - easternOffset);
-}
-
-function getEasternOffset(date: Date): number {
-  // Get the timezone offset for Eastern time at the given date
-  const easternDate = new Date(
-    date.toLocaleString("en-US", { timeZone: "America/New_York" }),
+function getEasternDate(): Date {
+  // Get current time in Eastern timezone
+  const now = new Date();
+  const easternTime = new Date(
+    now.toLocaleString("en-US", {
+      timeZone: "America/New_York",
+    }),
   );
-  const utcDate = new Date(date.toLocaleString("en-US", { timeZone: "UTC" }));
-  return utcDate.getTime() - easternDate.getTime();
+  return easternTime;
+}
+
+function createEasternDate(
+  year: number,
+  month: number,
+  day: number,
+  hours: number,
+  minutes: number,
+): Date {
+  // Create a date in Eastern timezone
+  // Use ISO string format with Eastern timezone offset
+  const isDST = isDaylightSavingTime(new Date(year, month - 1, day));
+  const offset = isDST ? "-04:00" : "-05:00"; // EDT vs EST
+
+  const isoString = `${year}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}T${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:00.000${offset}`;
+  return new Date(isoString);
+}
+
+function isDaylightSavingTime(date: Date): boolean {
+  // Simple DST check for Eastern timezone
+  // DST typically runs from second Sunday in March to first Sunday in November
+  const year = date.getFullYear();
+  const march = new Date(year, 2, 1); // March 1st
+  const november = new Date(year, 10, 1); // November 1st
+
+  // Find second Sunday in March
+  const dstStart = new Date(march);
+  dstStart.setDate(1 + (7 - march.getDay()) + 7); // Second Sunday
+
+  // Find first Sunday in November
+  const dstEnd = new Date(november);
+  dstEnd.setDate(1 + ((7 - november.getDay()) % 7)); // First Sunday
+
+  return date >= dstStart && date < dstEnd;
 }
 
 const relativeRegex =
@@ -380,8 +387,15 @@ function parseTime(input: string): Date | null {
 
       const timeOnly = parseTimeOnly(timeString);
       if (timeOnly) {
-        tomorrow.setHours(timeOnly.hours, timeOnly.minutes, 0, 0);
-        return createEasternDate(tomorrow);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        return createEasternDate(
+          tomorrow.getFullYear(),
+          tomorrow.getMonth() + 1,
+          tomorrow.getDate(),
+          timeOnly.hours,
+          timeOnly.minutes,
+        );
       }
     }
 
@@ -435,24 +449,33 @@ function parseTime(input: string): Date | null {
           if (ampm === "am" && hours === 12) hours = 0;
         }
 
-        const date = new Date(year, month - 1, day, hours, minutes ?? 0, 0, 0);
-        return createEasternDate(date);
+        return createEasternDate(year, month, day, hours, minutes ?? 0);
       }
     }
 
     // Try to parse as time only for today
     const timeOnly = parseTimeOnly(cleaned);
     if (timeOnly) {
-      const result = new Date(today);
-      result.setHours(timeOnly.hours, timeOnly.minutes, 0, 0);
-      const estResult = createEasternDate(result);
+      let targetDate = createEasternDate(
+        today.getFullYear(),
+        today.getMonth() + 1,
+        today.getDate(),
+        timeOnly.hours,
+        timeOnly.minutes,
+      );
 
       // If the time has already passed today, schedule for tomorrow
-      if (estResult <= now) {
-        estResult.setDate(estResult.getDate() + 1);
+      if (targetDate <= now) {
+        targetDate = createEasternDate(
+          today.getFullYear(),
+          today.getMonth() + 1,
+          today.getDate() + 1,
+          timeOnly.hours,
+          timeOnly.minutes,
+        );
       }
 
-      return estResult;
+      return targetDate;
     }
 
     // Try parsing as a natural language date

@@ -158,11 +158,8 @@ export function formatScheduledTime(date: Date): string {
 }
 
 export function getTimeUntilScheduled(scheduledTime: Date): string {
-  // Get current time in Eastern timezone
-  const easternTimeString = new Date().toLocaleString("en-US", {
-    timeZone: "America/New_York",
-  });
-  const now = new Date(easternTimeString);
+  // Get current time
+  const now = new Date();
   const diff = scheduledTime.getTime() - now.getTime();
 
   if (diff <= 0) {
