@@ -8,15 +8,20 @@ import {
   TextChannel,
   VoiceChannel,
 } from "discord.js";
-import path from "node:path";
 import { DataTypes, Model, Op, Sequelize } from "sequelize";
 
 // Initialize Sequelize with SQLite
-export const sequelize = new Sequelize("database", "user", "password", {
-  host: "localhost",
-  dialect: "sqlite",
+export const sequelize = new Sequelize(process.env.DATABASE_URL!, {
+  dialect: "postgres",
+  protocol: "postgres",
   logging: false,
-  storage: path.join(process.cwd(), "database.sqlite"),
+  dialectOptions: {
+    ssl: {
+      require: true,
+      // depending on your host you may need:
+      rejectUnauthorized: false,
+    },
+  },
 });
 
 // Store Discord client for auto-unlock functionality
