@@ -21,10 +21,30 @@ export async function execute(message: Message) {
     try {
       // Fetch the last 10 messages for context
       const messages = await message.channel.messages.fetch({ limit: 10 });
-      const messageHistory = messages
-        .reverse()
-        .map((msg) => `${msg.author.username}: ${msg.content}`)
-        .join("\n");
+
+      // Get all unique users from recent messages for ping reference
+      const recentUsers = new Set<string>();
+      const processedMessages: string[] = [];
+
+      for (const msg of Array.from(messages.values()).reverse()) {
+        recentUsers.add(msg.author.username);
+
+        // Replace mentions with usernames
+        let processedContent = msg.content;
+        for (const [userId, user] of msg.mentions.users) {
+          processedContent = processedContent.replace(
+            new RegExp(`<@!?${userId}>`, "g"),
+            `@${user.username}`,
+          );
+        }
+
+        processedMessages.push(`${msg.author.username}: ${processedContent}`);
+      }
+
+      const messageHistory = processedMessages.join("\n");
+      const pingableUsers = Array.from(recentUsers)
+        .filter((username) => username !== client.user?.username)
+        .slice(0, 10); // Limit to recent users
 
       // Generate AI response using OpenRouter
       const { text } = await generateText({
@@ -32,15 +52,19 @@ export async function execute(message: Message) {
         messages: [
           {
             role: "system",
-            content:
-              "You are a helpful Discord bot. Respond naturally to the conversation based on the recent message history. Be engaging and contextually aware.",
+            content: `You are a helpful Discord bot. Respond naturally to the conversation based on the recent message history. Be engaging and contextually aware.
+
+You can ping users by using @username format. Here are the users you can reference from recent conversation:
+${pingableUsers.map((user) => `- @${user}`).join("\n")}
+
+Only ping users when it's contextually relevant to the conversation.`,
           },
           {
             role: "user",
             content: `Recent conversation:\n${messageHistory}\n\nPlease respond to the latest message that mentioned you.`,
           },
         ],
-        maxTokens: 150,
+        maxOutputTokens: 256,
       });
 
       await message.reply(text);
