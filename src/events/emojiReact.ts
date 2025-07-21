@@ -22,7 +22,7 @@ export async function execute(message: Message) {
   // Don't react to bot messages
   if (message.author.bot) return;
 
-  if (Math.random() < 3 / 100) {
+  if (Math.random() < 0.5 / 100) {
     try {
       const randomEmojis = getRandomEmojis(14);
 
