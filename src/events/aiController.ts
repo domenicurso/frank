@@ -43,7 +43,7 @@ export async function execute(message: Message) {
 
         const response = await generateAIResponse(message);
 
-        await message.reply(response);
+        await message.reply(response || "kys I aint responding to ts rn");
       } catch (error) {
         console.error("Error generating AI response:", error);
         await message.reply("Sorry, I'm having trouble thinking right now! 🤖");

@@ -59,14 +59,14 @@ Only ping users when it's contextually relevant to the conversation. Never prepe
   ];
 
   // Generate AI response using OpenRouter
-  const { text } = await generateText({
+  const response = await generateText({
     model: openrouter("x-ai/grok-3-mini"),
     messages: promptMessages,
     maxOutputTokens: 256,
   });
 
   // Convert @username mentions back to Discord <@id> format
-  let processedResponse = text;
+  let processedResponse = response.text;
   for (const [id, username] of pingableUsers) {
     processedResponse = processedResponse.replace(
       new RegExp(`@${username}\\b`, "g"),
