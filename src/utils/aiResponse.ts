@@ -50,7 +50,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
 You can ping users by using @username format. Here are the users you can reference from recent conversation:
 ${pingableUsers.map(([id, username]) => `- @${username} (ID: ${id})`).join("\n")}
 
-Only ping users when it's contextually relevant to the conversation.`,
+Only ping users when it's contextually relevant to the conversation. Never prepend your messages with "AI:" or "Bot:" or anything similar.`,
     },
     {
       role: "user",
@@ -60,7 +60,7 @@ Only ping users when it's contextually relevant to the conversation.`,
 
   // Generate AI response using OpenRouter
   const { text } = await generateText({
-    model: openrouter("openai/gpt-4o-mini"),
+    model: openrouter("x-ai/grok-3-mini"),
     messages: promptMessages,
     maxOutputTokens: 256,
   });

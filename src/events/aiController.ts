@@ -1,6 +1,6 @@
 import { client } from "@/client";
 import { generateAIResponse } from "@/utils/aiResponse";
-import type { Message } from "discord.js";
+import type { Message, TextChannel } from "discord.js";
 import { Events } from "discord.js";
 
 /**
@@ -37,18 +37,17 @@ export async function execute(message: Message) {
     )?.author.id === client.user?.id;
 
   if (isMentioned || isReplyToBot) {
-    try {
-      // Send initial acknowledgment message
-      const replyMessage = await message.reply("🤖 Thinking...");
+    if (message.channel.isTextBased()) {
+      try {
+        await (message.channel as TextChannel).sendTyping();
 
-      // Generate AI response
-      const response = await generateAIResponse(message);
+        const response = await generateAIResponse(message);
 
-      // Edit the reply with the actual response
-      await replyMessage.edit(response);
-    } catch (error) {
-      console.error("Error generating AI response:", error);
-      await message.reply("Sorry, I'm having trouble thinking right now! 🤖");
+        await message.reply(response);
+      } catch (error) {
+        console.error("Error generating AI response:", error);
+        await message.reply("Sorry, I'm having trouble thinking right now! 🤖");
+      }
     }
   }
 }
