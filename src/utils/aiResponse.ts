@@ -62,7 +62,7 @@ Only ping users when it's contextually relevant to the conversation.`,
   const { text } = await generateText({
     model: openrouter("openai/gpt-4o-mini"),
     messages: promptMessages,
-    maxTokens: 256,
+    maxOutputTokens: 256,
   });
 
   // Convert @username mentions back to Discord <@id> format
