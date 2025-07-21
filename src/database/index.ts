@@ -10,7 +10,7 @@ import {
 } from "discord.js";
 import { DataTypes, Model, Op, Sequelize } from "sequelize";
 
-// Initialize Sequelize with SQLite
+// Initialize Sequelize
 export const sequelize = new Sequelize(process.env.DATABASE_URL!, {
   dialect: "postgres",
   protocol: "postgres",
