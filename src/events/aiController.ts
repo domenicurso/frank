@@ -28,7 +28,6 @@ export async function execute(message: Message) {
 
       // Generate AI response using OpenRouter
       const { text } = await generateText({
-        // @ts-ignore
         model: openrouter("openai/gpt-4.1-nano"),
         messages: [
           {
