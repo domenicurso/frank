@@ -87,6 +87,29 @@ export async function trackMessageSent(
 }
 
 /**
+ * Update user stats when a message is deleted
+ */
+export async function trackMessageDeleted(
+  userId: string,
+  guildId: string,
+): Promise<void> {
+  try {
+    const userStats = await UserStats.findOne({
+      where: { userId, guildId },
+    });
+
+    if (userStats && userStats.messagesCount > 0) {
+      // Decrement message count and update lastActive
+      await userStats.decrement("messagesCount", { by: 1 });
+      await userStats.update({ lastActive: new Date() });
+    }
+  } catch (error) {
+    console.error(chalk.red("[DB] Error tracking message deleted:"), error);
+    // Don't throw - we don't want message handling to fail due to stats tracking
+  }
+}
+
+/**
  * Get user stats for a specific user in a guild
  */
 export async function getUserStats(
