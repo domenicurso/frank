@@ -4,6 +4,7 @@ import { logModerationAction } from "@/utils/moderation";
 import {
   ChatInputCommandInteraction,
   GuildMember,
+  Message,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
@@ -19,10 +20,10 @@ export const definition = new SlashCommandBuilder()
   .addIntegerOption((option) =>
     option
       .setName("amount")
-      .setDescription("Number of messages to delete (1-100)")
+      .setDescription("Number of messages to delete (1-1000)")
       .setRequired(true)
       .setMinValue(1)
-      .setMaxValue(100),
+      .setMaxValue(1000),
   )
   .addUserOption((option) =>
     option
@@ -142,75 +143,150 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     }
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   try {
-    // Fetch messages to delete
-    let messagesToDelete;
+    // Collect all messages to delete
+    let allMessagesToDelete: Message[] = [];
+    let totalFetched = 0;
+    let lastMessageId: string | undefined;
+    const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
 
-    if (targetUser) {
-      // Fetch more messages to filter by user
-      const fetchLimit = Math.min(amount * 5, 500); // Fetch more to account for filtering
-      const messages = await channel.messages.fetch({ limit: fetchLimit });
-
-      const filteredMessages = messages.filter(
-        (msg) => msg.author.id === targetUser.id,
-      );
-      messagesToDelete = filteredMessages.first(amount);
-    } else {
-      // Fetch the exact amount
-      const allMessages = await channel.messages.fetch({ limit: amount });
-      messagesToDelete = Array.from(allMessages.values());
+    // Update progress for large operations
+    if (amount > 100) {
+      await interaction.editReply({
+        embeds: [
+          createEmbed(
+            YELLOW,
+            "Collecting Messages",
+            `Fetching messages to delete... This may take a moment for large amounts.`,
+          ),
+        ],
+      });
     }
 
-    if (messagesToDelete.length === 0) {
+    // Fetch messages in batches
+    while (allMessagesToDelete.length < amount && totalFetched < amount * 3) {
+      const batchSize = Math.min(100, amount * 2); // Fetch in reasonable batches
+      const fetchOptions: { limit: number; before?: string } = {
+        limit: batchSize,
+      };
+      if (lastMessageId) {
+        fetchOptions.before = lastMessageId;
+      }
+
+      const messages = await channel.messages.fetch(fetchOptions);
+      if (messages.size === 0) break; // No more messages
+
+      const messageArray = Array.from(messages.values());
+      lastMessageId = messageArray[messageArray.length - 1]?.id;
+      totalFetched += messages.size;
+
+      if (targetUser) {
+        // Filter by target user
+        const filteredMessages = messageArray.filter(
+          (msg) =>
+            msg.author.id === targetUser.id &&
+            msg.createdTimestamp > twoWeeksAgo,
+        );
+        allMessagesToDelete.push(...filteredMessages);
+      } else {
+        // Add all recent messages
+        const recentMessages = messageArray.filter(
+          (msg) => msg.createdTimestamp > twoWeeksAgo,
+        );
+        allMessagesToDelete.push(...recentMessages);
+      }
+
+      // Break if we have enough messages or if we fetched less than requested (end of channel)
+      if (allMessagesToDelete.length >= amount || messages.size < batchSize) {
+        break;
+      }
+    }
+
+    // Trim to exact amount requested
+    allMessagesToDelete = allMessagesToDelete.slice(0, amount);
+
+    if (allMessagesToDelete.length === 0) {
       await interaction.editReply({
         embeds: [
           createEmbed(
             YELLOW,
             "No Messages Found",
             targetUser
-              ? `No messages found from ${targetUser.tag} in the recent message history.`
-              : "No messages found to delete.",
+              ? `No recent messages found from ${targetUser.tag}.`
+              : "No recent messages found to delete.",
           ),
         ],
       });
       return;
     }
 
-    // Filter out messages older than 14 days (Discord limitation)
-    const twoWeeksAgo = Date.now() - 14 * 24 * 60 * 60 * 1000;
-    const recentMessages = messagesToDelete.filter(
-      (msg) => msg.createdTimestamp > twoWeeksAgo,
-    );
+    // Delete messages in batches of 100 (Discord's bulk delete limit)
+    let totalDeletedCount = 0;
+    const batches = [];
 
-    if (recentMessages.length === 0) {
+    // Split messages into batches of 100
+    for (let i = 0; i < allMessagesToDelete.length; i += 100) {
+      batches.push(allMessagesToDelete.slice(i, i + 100));
+    }
+
+    // Update progress for multiple batches
+    if (batches.length > 1) {
       await interaction.editReply({
         embeds: [
           createEmbed(
             YELLOW,
-            "Messages Too Old",
-            "All found messages are older than 14 days and cannot be bulk deleted.",
+            "Deleting Messages",
+            `Deleting messages in ${batches.length} batch${batches.length !== 1 ? "es" : ""}... (0/${batches.length} completed)`,
           ),
         ],
       });
-      return;
     }
 
-    // Delete messages
-    let deletedCount = 0;
-    if (recentMessages.length === 1) {
-      // Delete single message individually
-      await recentMessages[0]?.delete();
-      deletedCount = 1;
-    } else {
-      // Bulk delete
-      const deleted = await channel.bulkDelete(recentMessages, true);
-      deletedCount = deleted.size;
+    // Process each batch
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      if (!batch || batch.length === 0) continue;
+
+      try {
+        if (batch.length === 1) {
+          // Delete single message individually
+          await batch[0]?.delete();
+          totalDeletedCount += 1;
+        } else {
+          // Bulk delete
+          const deleted = await channel.bulkDelete(batch, true);
+          totalDeletedCount += deleted.size;
+        }
+
+        // Update progress for multi-batch operations
+        if (batches.length > 1 && i < batches.length - 1) {
+          await interaction.editReply({
+            embeds: [
+              createEmbed(
+                YELLOW,
+                "Deleting Messages",
+                `Deleting messages in ${batches.length} batch${batches.length !== 1 ? "es" : ""}... (${i + 1}/${batches.length} completed)`,
+              ),
+            ],
+          });
+        }
+
+        // Add a small delay between batches to avoid rate limits
+        if (i < batches.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      } catch (error) {
+        console.error(`Error deleting batch ${i + 1}:`, error);
+        // Continue with other batches even if one fails
+      }
     }
+
+    const skippedCount = allMessagesToDelete.length - totalDeletedCount;
+    const deletedCount = totalDeletedCount;
 
     // Send success response
-    const skippedCount = messagesToDelete.length - deletedCount;
     let description = `Successfully deleted **${deletedCount}** message${deletedCount !== 1 ? "s" : ""}`;
 
     if (targetUser) {

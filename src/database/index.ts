@@ -10,19 +10,34 @@ import {
 } from "discord.js";
 import { DataTypes, Model, Op, Sequelize } from "sequelize";
 
-// Initialize Sequelize
-export const sequelize = new Sequelize(process.env.DATABASE_URL!, {
-  dialect: "postgres",
-  protocol: "postgres",
-  logging: false,
-  dialectOptions: {
-    ssl: {
-      require: true,
-      // depending on your host you may need:
-      rejectUnauthorized: false,
-    },
-  },
-});
+// Initialize Sequelize with environment-based configuration
+const isDevelopment =
+  process.env.NODE_ENV === "development" || !process.env.DATABASE_URL;
+
+console.log(
+  chalk.blue(
+    `[DB] Using ${isDevelopment ? "SQLite (development)" : "PostgreSQL (production)"} database`,
+  ),
+);
+
+export const sequelize = isDevelopment
+  ? new Sequelize({
+      dialect: "sqlite",
+      storage: "database.sqlite",
+      logging: false,
+    })
+  : new Sequelize(process.env.DATABASE_URL!, {
+      dialect: "postgres",
+      protocol: "postgres",
+      logging: false,
+      dialectOptions: {
+        ssl: {
+          require: true,
+          // depending on your host you may need:
+          rejectUnauthorized: false,
+        },
+      },
+    });
 
 // Store Discord client for auto-unlock functionality
 let discordClient: Client | null = null;
@@ -443,8 +458,13 @@ export async function updateGuildConfig(
 export async function initializeDatabase() {
   try {
     await sequelize.authenticate();
+    const isDevelopment =
+      process.env.NODE_ENV === "development" || !process.env.DATABASE_URL;
+
     console.log(
-      chalk.green("[DB] Database connection established successfully."),
+      chalk.green(
+        `[DB] ${isDevelopment ? "SQLite" : "PostgreSQL"} connection established successfully.`,
+      ),
     );
 
     // Simple sync - create tables if they don't exist, don't alter existing ones
