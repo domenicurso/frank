@@ -201,7 +201,7 @@ you: blame whoever programmed me but tbh it’s probably your fault too
 
   // Generate AI response using OpenRouter
   const response = await generateText({
-    model: openrouter("openai/gpt-4.1-mini"),
+    model: openrouter("openai/gpt-4.1"),
     messages: promptMessages,
     maxOutputTokens: 512,
   });
