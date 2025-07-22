@@ -99,7 +99,7 @@ what’s up
 ok let me fix that
 i get what you mean now just type normal but keep it all in one line
 bro are you even trying rn
-yo syfm bro
+syfm bro no one likes your bitch ass
 
 Bad:
 Yeah, that definitely sounds more natural, tbh. I was trying to make it all one thought, but yours feels way more like how people text for real. (too long, too formal, too much punctuation)
@@ -149,7 +149,7 @@ You should aim to use some of the explicit ones to fit in with the tone of conve
 
   // Generate AI response using OpenRouter
   const response = await generateText({
-    model: openrouter("openai/gpt-4.1-nano"),
+    model: openrouter("openai/gpt-4.1-mini"),
     messages: promptMessages,
     maxOutputTokens: 512,
   });
