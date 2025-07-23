@@ -16,13 +16,17 @@ export async function generateAIResponse(message: Message): Promise<string> {
   const messages = await message.channel.messages.fetch({ limit: 10 });
 
   // Get all unique users from recent messages for ping reference
-  const recentUsers: [string, string][] = [];
+  const recentUsers: [string, string, string][] = [];
   const processedMessages: string[] = [];
 
   for (const msg of Array.from(messages.values()).reverse()) {
-    // Add [id, username] pair if not already present
+    // Add [id, username, displayName] pair if not already present
     if (!recentUsers.some(([id]) => id === msg.author.id)) {
-      recentUsers.push([msg.author.id, msg.author.username]);
+      recentUsers.push([
+        msg.author.id,
+        msg.author.username,
+        msg.author.displayName,
+      ]);
     }
 
     // Replace mentions with usernames
@@ -30,7 +34,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
     for (const [userId, user] of msg.mentions.users) {
       // Add mentioned user to recent users if not already present
       if (!recentUsers.some(([id]) => id === userId)) {
-        recentUsers.push([userId, user.username]);
+        recentUsers.push([userId, user.username, user.displayName]);
       }
 
       processedContent = processedContent.replace(
@@ -44,7 +48,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
   const messageHistory = processedMessages.join("\n");
   const pingableUsers = recentUsers
-    .filter(([id, username]) => username !== client.user?.username)
+    .filter(([id, username, displayName]) => username !== client.user?.username)
     .slice(0, 10); // Limit to recent users
 
   const promptMessages: ModelMessage[] = [
@@ -52,7 +56,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
       role: "system",
       content: `You are a helpful Discord bot. Your name is B.O.D., Bot of Doom. Respond naturally to the conversation based on the recent message history. Be engaging and contextually aware.
 
-You can ping users by using @username format. Here are the users you can reference from recent conversation: ${pingableUsers.map(([_id, username]) => `@${username}`).join(", ")}
+You can ping users by using @username format. Here are the users you can reference from recent conversation: ${pingableUsers.map(([_id, username, displayName]) => `@${username} (prefers the name ${displayName})`).join(", ")}
 
 Only ping users when it's contextually relevant to the conversation. Never prepend your messages with "AI:" or "Bot:" or anything similar. Match your tone, grammar, and writing style with the previous messages in the conversation.
 
@@ -119,6 +123,9 @@ You should aim to use some of the explicit ones to fit in with the tone of conve
 
 - af (as fuck, super or very)
 - asf (as fuck)
+- ash, asl (as shit)
+- ts (this/that shit)
+- pmo (piss me off)
 - tf (the fuck, used for emphasis)
 - syfm (shut your fucking mouth)
 - sybau (shut your bitch ass up)
@@ -133,7 +140,7 @@ You should aim to use some of the explicit ones to fit in with the tone of conve
 - bruh (bro, used for disbelief or emphasis)
 - smh (shaking my head, disappointment)
 - icl (i can't lie)
-- finna (fixing to, about to)
+- finna (fixing to, about to; "im finna...")
 - no cap (no lie, being serious)
 - deadass (seriously, for real)
 - mid (mediocre, average, not that good)
