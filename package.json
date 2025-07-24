@@ -26,6 +26,6 @@
     "sequelize": "^6.37.7",
     "sqlite3": "^5.1.7",
     "unicode-emoji-json": "^0.8.0",
-    "zod": "^4.0.8"
+    "zod": "^3.23.8"
   }
 }

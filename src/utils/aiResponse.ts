@@ -9,7 +9,7 @@ import {
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, tool, type CoreMessage } from "ai";
 import type { Message } from "discord.js";
-import z from "zod";
+import { z } from "zod";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
@@ -258,13 +258,8 @@ you: blame whoever programmed me but tbh it’s probably your fault too
             "Additional context about when/why this memory was created",
           ),
       }),
-      execute: async (params: {
-        key: string;
-        value: string;
-        context?: string;
-      }) => {
+      execute: async ({ key, value, context }) => {
         try {
-          const { key, value, context } = params;
           const memory = await createMemory(
             userId,
             guildId,
@@ -273,12 +268,12 @@ you: blame whoever programmed me but tbh it’s probably your fault too
             context,
           );
           if (memory) {
-            return { message: `Memory created: ${key} = ${value}` };
+            return `Memory created: ${key} = ${value}`;
           }
-          return { message: "Failed to create memory" };
+          return "Failed to create memory";
         } catch (error) {
           console.error("Error creating memory:", error);
-          return { message: "Failed to create memory" };
+          return "Failed to create memory";
         }
       },
     }),
@@ -295,13 +290,8 @@ you: blame whoever programmed me but tbh it’s probably your fault too
           .optional()
           .describe("Additional context about this update"),
       }),
-      execute: async (params: {
-        key: string;
-        value: string;
-        context?: string;
-      }) => {
+      execute: async ({ key, value, context }) => {
         try {
-          const { key, value, context } = params;
           const memory = await updateMemory(
             userId,
             guildId,
@@ -310,12 +300,12 @@ you: blame whoever programmed me but tbh it’s probably your fault too
             context,
           );
           if (memory) {
-            return { message: `Memory updated: ${key} = ${value}` };
+            return `Memory updated: ${key} = ${value}`;
           }
-          return { message: "Failed to update memory" };
+          return "Failed to update memory";
         } catch (error) {
           console.error("Error updating memory:", error);
-          return { message: "Failed to update memory" };
+          return "Failed to update memory";
         }
       },
     }),
@@ -328,31 +318,48 @@ you: blame whoever programmed me but tbh it’s probably your fault too
           .string()
           .describe("The unique identifier of the memory to delete"),
       }),
-      execute: async (params: { key: string }) => {
+      execute: async ({ key }) => {
         try {
-          const { key } = params;
           const deleted = await deleteMemory(userId, guildId, key);
           if (deleted) {
-            return { message: `Memory deleted: ${key}` };
+            return `Memory deleted: ${key}`;
           }
-          return { message: "Memory not found or failed to delete" };
+          return "Memory not found or failed to delete";
         } catch (error) {
           console.error("Error deleting memory:", error);
-          return { message: "Memory not found or failed to delete" };
+          return "Memory not found or failed to delete";
         }
       },
     }),
   };
 
-  const { text, usage } = await generateText({
-    model: openrouter("openai/gpt-4.1"),
-    messages: promptMessages,
-    maxTokens: 1000,
-    tools,
-    toolChoice: "auto",
-    maxSteps: 3, // enable multi-step calls
-    experimental_continueSteps: true,
-  });
+  let text: string;
+  try {
+    const result = await generateText({
+      model: openrouter("openai/gpt-4o"),
+      messages: promptMessages,
+      maxTokens: 1000,
+      tools,
+      toolChoice: "auto",
+      maxSteps: 3, // enable multi-step calls
+      experimental_continueSteps: true,
+    });
+    text = result.text;
+  } catch (error) {
+    console.error("Error generating AI response:", error);
+    // Fallback response without tools
+    try {
+      const fallbackResult = await generateText({
+        model: openrouter("openai/gpt-4o"),
+        messages: promptMessages,
+        maxTokens: 1000,
+      });
+      text = fallbackResult.text;
+    } catch (fallbackError) {
+      console.error("Fallback generation also failed:", fallbackError);
+      return "sorry something went wrong with my brain rn";
+    }
+  }
 
   let processedResponse = text;
   for (const [id, username] of pingableUsers) {
