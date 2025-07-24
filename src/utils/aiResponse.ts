@@ -67,7 +67,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
   const memoryContext =
     recentMemories.length > 0
-      ? `Guild memories:
+      ? `Your long-term memories:
       ${recentMemories
         .map((m: Memory) => {
           // Try to find username from recent users, fallback to user ID
@@ -76,7 +76,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
           return `- ${userDisplay}: ${m.key} = ${m.value}${m.context ? ` (${m.context})` : ""}`;
         })
         .join("\n")}`
-      : "Guild has no memories.";
+      : "No long-term memories available.";
 
   const promptMessages: CoreMessage[] = [
     {
@@ -87,15 +87,15 @@ You can ping users by using @username format. Here are the users you can referen
 
 Only ping users when it's contextually relevant to the conversation. Never prepend your messages with "AI:" or "Bot:" or anything similar. Match your tone, grammar, and writing style with the previous messages in the conversation.
 
-<memories>
+<long_term_memory>
 
-You have access to memory tools to remember information about users and conversations. Use create_memory to store new information, update_memory to modify existing memories, and delete_memory to remove outdated information. Always remember important details about users, their preferences, ongoing conversations, or any context that should persist.
+You have access to memory tools to remember information about users and conversations. Use create_memory to store new information, update_memory to modify existing memories, and delete_memory to remove outdated information. Always remember important details about users, their preferences, ongoing conversations, or any context that should persist between conversations.
 
-You MUST always use the memory tools since you can only remember the last few messages in a conversation at anytime. This is to help with your dementia. IN ORDER TO REMEMBER SOMETHING, YOU MUST USE THE MEMORY TOOLS, OTHERWISE YOU WILL FORGET IT. When using the memory tools, always provide a confirmation to the user whether it was successfully saved or not.
+You MUST always use the memory tools since you can only remember the last few messages in a conversation at anytime. This is to help with your dementia. IN ORDER TO REMEMBER SOMETHING, YOU MUST USE THE MEMORY TOOLS, OTHERWISE YOU WILL FORGET IT.
 
 ${memoryContext}
 
-</memories>
+</long_term_memory>
 
 <personality>
 

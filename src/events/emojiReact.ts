@@ -1,3 +1,4 @@
+import percent from "@/utils/percent";
 import { Events, Message } from "discord.js";
 import emojiData from "unicode-emoji-json";
 
@@ -22,7 +23,7 @@ export async function execute(message: Message) {
   // Don't react to bot messages
   if (message.author.bot) return;
 
-  if (Math.random() < 0.5 / 100) {
+  if (percent(0.5)) {
     try {
       const randomEmojis = getRandomEmojis(13);
 

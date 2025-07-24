@@ -1,5 +1,6 @@
 import { client } from "@/client";
 import { generateAIResponse } from "@/utils/aiResponse";
+import percent from "@/utils/percent";
 import type { Message, TextChannel } from "discord.js";
 import { Events } from "discord.js";
 
@@ -36,7 +37,7 @@ export async function execute(message: Message) {
         .catch(() => null)
     )?.author.id === client.user?.id;
 
-  if (isMentioned || isReplyToBot) {
+  if (isMentioned || isReplyToBot || percent(10)) {
     if (message.channel.isTextBased()) {
       try {
         await (message.channel as TextChannel).sendTyping();
