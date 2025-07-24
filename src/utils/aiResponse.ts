@@ -1,7 +1,7 @@
 import { client } from "@/client";
 import { createMemoryTools } from "@/utils/memoryTools";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { streamText, type CoreMessage } from "ai";
+import { generateText, streamText, type CoreMessage } from "ai";
 import type { Message } from "discord.js";
 import { getGuildMemories, Memory } from "../database";
 
@@ -245,7 +245,7 @@ you: blame whoever programmed me but tbh it’s probably your fault too
   // Create memory tools with context
   const memoryToolsWithContext = createMemoryTools(userId, guildId);
 
-  const response = streamText({
+  const response = await generateText({
     model: openrouter("openai/gpt-4.1"),
     messages: promptMessages,
     maxTokens: 1000,
@@ -254,13 +254,7 @@ you: blame whoever programmed me but tbh it’s probably your fault too
     maxSteps: 3,
   });
 
-  // Collect the final text from the stream
-  let finalText = "";
-  for await (const chunk of response.textStream) {
-    finalText += chunk;
-  }
-
-  let processedResponse = finalText;
+  let processedResponse = response.text;
   for (const [id, username] of pingableUsers) {
     // Escape regex special characters in username
     const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
