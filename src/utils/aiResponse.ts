@@ -1,7 +1,9 @@
 import { client } from "@/client";
+import { createMemoryTools } from "@/utils/memoryTools";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type ModelMessage } from "ai";
 import type { Message } from "discord.js";
+import { getGuildMemories, Memory } from "../database";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
@@ -48,8 +50,27 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
   const messageHistory = processedMessages.join("\n");
   const pingableUsers = recentUsers
-    .filter(([_id, username, _displayName]) => username !== client.user?.username)
+    .filter(
+      ([_id, username, _displayName]) => username !== client.user?.username,
+    )
     .slice(0, 10); // Limit to recent users
+
+  // Fetch memories for this guild (limit to recent 20)
+  const memories = await getGuildMemories(message.guildId || "");
+  const recentMemories = memories.slice(0, 20);
+
+  const memoryContext =
+    recentMemories.length > 0
+      ? `Guild memories:
+      ${recentMemories
+        .map((m: Memory) => {
+          // Try to find username from recent users, fallback to user ID
+          const user = recentUsers.find(([id]) => id === m.userId);
+          const userDisplay = user ? `@${user[1]}` : `User(${m.userId})`;
+          return `- ${userDisplay}: ${m.key} = ${m.value}${m.context ? ` (${m.context})` : ""}`;
+        })
+        .join("\n")}`
+      : "Guild has no memories.";
 
   const promptMessages: ModelMessage[] = [
     {
@@ -60,7 +81,13 @@ You can ping users by using @username format. Here are the users you can referen
 
 Only ping users when it's contextually relevant to the conversation. Never prepend your messages with "AI:" or "Bot:" or anything similar. Match your tone, grammar, and writing style with the previous messages in the conversation.
 
----
+<memories>
+
+You have access to memory tools to remember information about users and conversations. Use create_memory to store new information, update_memory to modify existing memories, and delete_memory to remove outdated information. Always remember important details about users, their preferences, ongoing conversations, or any context that should persist.
+
+${memoryContext}
+
+</memories>
 
 <personality>
 
@@ -209,11 +236,19 @@ you: blame whoever programmed me but tbh it’s probably your fault too
     },
   ];
 
-  // Generate AI response using OpenRouter
+  // Generate AI response using OpenRouter with memory tools
+  const userId = message.author.id;
+  const guildId = message.guildId || "";
+
+  // Create memory tools with context
+  const memoryToolsWithContext = createMemoryTools(userId, guildId);
+
   const response = await generateText({
     model: openrouter("openai/gpt-4.1"),
     messages: promptMessages,
     maxOutputTokens: 512,
+    tools: memoryToolsWithContext,
+    toolChoice: "auto",
   });
 
   let processedResponse = response.text;

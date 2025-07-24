@@ -339,8 +339,20 @@ export class GuildConfig extends Model {
   declare logWarnings: boolean;
   declare logChannelLocks: boolean;
   declare logMessageDeletes: boolean;
-  declare createdAt: Date;
-  declare updatedAt: Date;
+  declare createdAt?: Date;
+  declare updatedAt?: Date;
+}
+
+// Memory Model for bot long-term memory
+export class Memory extends Model {
+  declare id: number;
+  declare userId: string;
+  declare guildId: string;
+  declare key: string;
+  declare value: string;
+  declare context?: string;
+  declare createdAt?: Date;
+  declare updatedAt?: Date;
 }
 
 GuildConfig.init(
@@ -396,6 +408,50 @@ GuildConfig.init(
       {
         unique: true,
         fields: ["guildId"],
+      },
+    ],
+  },
+);
+
+// Initialize Memory model
+Memory.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true,
+    },
+    userId: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    guildId: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    key: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    value: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    context: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+  },
+  {
+    sequelize,
+    modelName: "Memory",
+    tableName: "memories",
+    indexes: [
+      {
+        fields: ["userId", "guildId"],
+      },
+      {
+        fields: ["key"],
       },
     ],
   },
@@ -803,6 +859,99 @@ export async function removeChannelLock(channelId: string, guildId: string) {
   } catch (error) {
     console.error(chalk.red("[DB] Error removing channel lock:"), error);
     return false;
+  }
+}
+
+// Memory utility functions
+export async function createMemory(
+  userId: string,
+  guildId: string,
+  key: string,
+  value: string,
+  context?: string,
+) {
+  try {
+    // Delete existing memory with same key for this user/guild
+    await Memory.destroy({
+      where: { userId, guildId, key },
+    });
+
+    // Create new memory
+    const memory = await Memory.create({
+      userId,
+      guildId,
+      key,
+      value,
+      context,
+    });
+    return memory;
+  } catch (error) {
+    console.error(chalk.red("[DB] Error creating memory:"), error);
+    return null;
+  }
+}
+
+export async function updateMemory(
+  userId: string,
+  guildId: string,
+  key: string,
+  value: string,
+  context?: string,
+) {
+  try {
+    const [memory, created] = await Memory.upsert({
+      userId,
+      guildId,
+      key,
+      value,
+      context,
+    });
+    return memory;
+  } catch (error) {
+    console.error(chalk.red("[DB] Error updating memory:"), error);
+    return null;
+  }
+}
+
+export async function deleteMemory(
+  userId: string,
+  guildId: string,
+  key: string,
+) {
+  try {
+    const deleted = await Memory.destroy({
+      where: { userId, guildId, key },
+    });
+    return deleted > 0;
+  } catch (error) {
+    console.error(chalk.red("[DB] Error deleting memory:"), error);
+    return false;
+  }
+}
+
+export async function getAllMemories(userId: string, guildId: string) {
+  try {
+    const memories = await Memory.findAll({
+      where: { userId, guildId },
+      order: [["updatedAt", "DESC"]],
+    });
+    return memories;
+  } catch (error) {
+    console.error(chalk.red("[DB] Error fetching memories:"), error);
+    return [];
+  }
+}
+
+export async function getGuildMemories(guildId: string) {
+  try {
+    const memories = await Memory.findAll({
+      where: { guildId },
+      order: [["updatedAt", "DESC"]],
+    });
+    return memories;
+  } catch (error) {
+    console.error(chalk.red("[DB] Error fetching guild memories:"), error);
+    return [];
   }
 }
 
