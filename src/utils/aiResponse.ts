@@ -1,7 +1,7 @@
 import { client } from "@/client";
 import { createMemoryTools } from "@/utils/memoryTools";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { streamText, type ModelMessage } from "ai";
+import { streamText, type CoreMessage } from "ai";
 import type { Message } from "discord.js";
 import { getGuildMemories, Memory } from "../database";
 
@@ -72,7 +72,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
         .join("\n")}`
       : "Guild has no memories.";
 
-  const promptMessages: ModelMessage[] = [
+  const promptMessages: CoreMessage[] = [
     {
       role: "system",
       content: `You are a helpful Discord bot. Your name is B.O.D., Bot of Doom. Respond naturally to the conversation based on the recent message history. Be engaging and contextually aware.
@@ -248,10 +248,10 @@ you: blame whoever programmed me but tbh it’s probably your fault too
   const response = streamText({
     model: openrouter("openai/gpt-4.1"),
     messages: promptMessages,
-    maxOutputTokens: 512,
-    maxSteps: 3,
+    maxTokens: 1000,
     tools: memoryToolsWithContext,
     toolChoice: "auto",
+    maxSteps: 3,
   });
 
   // Collect the final text from the stream

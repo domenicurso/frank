@@ -12,7 +12,7 @@ export function createMemoryTools(userId: string, guildId: string) {
     create_memory: tool({
       description:
         "Store a new memory about a user or conversation. Use this to remember important information about users, their preferences, ongoing conversations, or any context that should persist across messages.",
-      inputSchema: z.object({
+      parameters: z.object({
         key: z
           .string()
           .describe(
@@ -49,7 +49,7 @@ export function createMemoryTools(userId: string, guildId: string) {
     update_memory: tool({
       description:
         "Update an existing memory or create it if it doesn't exist. Use this when you need to modify information you've previously stored about a user or conversation.",
-      inputSchema: z.object({
+      parameters: z.object({
         key: z
           .string()
           .describe("The unique identifier of the memory to update"),
@@ -82,7 +82,7 @@ export function createMemoryTools(userId: string, guildId: string) {
     delete_memory: tool({
       description:
         "Delete a specific memory. Use this when information is no longer relevant or when a user asks to forget something specific.",
-      inputSchema: z.object({
+      parameters: z.object({
         key: z
           .string()
           .describe("The unique identifier of the memory to delete"),
