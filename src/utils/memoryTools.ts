@@ -35,12 +35,12 @@ export function createMemoryTools(userId: string, guildId: string) {
             context,
           );
           if (memory) {
-            return `Memory created: ${key} = ${value}`;
+            return { message: `Memory created: ${key} = ${value}` };
           }
-          return "Failed to create memory";
+          return { message: "Failed to create memory" };
         } catch (error) {
           console.error("Error creating memory:", error);
-          return "Failed to create memory";
+          return { message: "Failed to create memory" };
         }
       },
     },
@@ -72,12 +72,12 @@ export function createMemoryTools(userId: string, guildId: string) {
             context,
           );
           if (memory) {
-            return `Memory updated: ${key} = ${value}`;
+            return { message: `Memory updated: ${key} = ${value}` };
           }
-          return "Failed to update memory";
+          return { message: "Failed to update memory" };
         } catch (error) {
           console.error("Error updating memory:", error);
-          return "Failed to update memory";
+          return { message: "Failed to update memory" };
         }
       },
     },
@@ -95,12 +95,12 @@ export function createMemoryTools(userId: string, guildId: string) {
           const { key } = params;
           const deleted = await deleteMemory(userId, guildId, key);
           if (deleted) {
-            return `Memory deleted: ${key}`;
+            return { message: `Memory deleted: ${key}` };
           }
-          return "Memory not found or failed to delete";
+          return { message: "Memory not found or failed to delete" };
         } catch (error) {
           console.error("Error deleting memory:", error);
-          return "Memory not found or failed to delete";
+          return { message: "Memory not found or failed to delete" };
         }
       },
     },

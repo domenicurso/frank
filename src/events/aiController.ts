@@ -43,10 +43,10 @@ export async function execute(message: Message) {
 
         const response = await generateAIResponse(message);
 
-        await message.reply(response || "kys I aint responding to ts rn");
+        await message.reply(response || "The message content is empty.");
       } catch (error) {
         console.error("Error generating AI response:", error);
-        await message.reply("Sorry, I'm having trouble thinking right now! 🤖");
+        await message.reply("There was an error generating the response.");
       }
     }
   }
