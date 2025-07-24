@@ -334,7 +334,7 @@ you: blame whoever programmed me but tbh it’s probably your fault too
   };
 
   const { text } = await generateText({
-    model: openrouter("anthropic/claude-3.5-haiku"),
+    model: openrouter("openai/gpt-4.1-mini"),
     messages: promptMessages,
     maxTokens: 1000,
     tools,
