@@ -1,4 +1,5 @@
 import { client } from "@/client";
+import { GREEN, RED, YELLOW } from "@/constants";
 import {
   createMemory,
   deleteMemory,
@@ -280,7 +281,7 @@ you: blame whoever programmed me but tbh it’s probably your fault too
                 if (targetChannel && targetChannel.isTextBased()) {
                   const embed = new EmbedBuilder()
                     .setTitle("🧠 Memory Created")
-                    .setColor(0x00ff00)
+                    .setColor(GREEN)
                     .addFields(
                       { name: "User", value: `<@${userId}>`, inline: true },
                       { name: "Key", value: key, inline: true },
@@ -348,7 +349,7 @@ you: blame whoever programmed me but tbh it’s probably your fault too
                 if (targetChannel && targetChannel.isTextBased()) {
                   const embed = new EmbedBuilder()
                     .setTitle("🔄 Memory Updated")
-                    .setColor(0xffaa00)
+                    .setColor(YELLOW)
                     .addFields(
                       { name: "User", value: `<@${userId}>`, inline: true },
                       { name: "Key", value: key, inline: true },
@@ -406,7 +407,7 @@ you: blame whoever programmed me but tbh it’s probably your fault too
                 if (targetChannel && targetChannel.isTextBased()) {
                   const embed = new EmbedBuilder()
                     .setTitle("🗑️ Memory Deleted")
-                    .setColor(0xff0000)
+                    .setColor(RED)
                     .addFields(
                       { name: "User", value: `<@${userId}>`, inline: true },
                       { name: "Deleted Key", value: key, inline: true },
