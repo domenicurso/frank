@@ -19,7 +19,7 @@ export function buildSystemPrompt(
 
 ${memoryPrompt}
 
-${personalityPrompt}
+${personalityPrompt}`;
 
-${examplesPrompt}`;
+  // ${examplesPrompt}`;
 }

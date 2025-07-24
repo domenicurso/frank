@@ -24,7 +24,7 @@ const openrouter = createOpenRouter({
  */
 export async function generateAIResponse(message: Message): Promise<string> {
   // Fetch the last 10 messages for context
-  const messages = await message.channel.messages.fetch({ limit: 30 });
+  const messages = await message.channel.messages.fetch({ limit: 15 });
 
   // Get all unique users from recent messages for ping reference
   const recentUsers: [string, string, string][] = [];
