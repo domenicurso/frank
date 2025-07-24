@@ -21,7 +21,7 @@ const openrouter = createOpenRouter({
  */
 export async function generateAIResponse(message: Message): Promise<string> {
   // Fetch the last 10 messages for context
-  const messages = await message.channel.messages.fetch({ limit: 10 });
+  const messages = await message.channel.messages.fetch({ limit: 30 });
 
   // Get all unique users from recent messages for ping reference
   const recentUsers: [string, string, string][] = [];
@@ -81,9 +81,9 @@ export async function generateAIResponse(message: Message): Promise<string> {
   const promptMessages: CoreMessage[] = [
     {
       role: "system",
-      content: `You are a helpful Discord bot. Your name is B.O.D., Bot of Doom. Respond naturally to the conversation based on the recent message history. Be engaging and contextually aware.
+      content: `You are a helpful Discord bot. Your name is B.O.D., Bot of Doom. Respond naturally to the conversation based on the recent message history. Be engaging and contextually aware. The current date is ${new Date().toLocaleDateString()}.
 
-You can ping users by using @username format. Here are the users you can reference from recent conversation: ${pingableUsers.map(([_id, username, displayName]) => `@${username} (prefers the name ${displayName})`).join(", ")}
+You can ping users by using the "@username" format. In order for a ping to work, you must mention their username exactly, including all leading and trailing punctuation. Here are the users you can reference from recent conversation: ${pingableUsers.map(([_id, username, displayName]) => `@${username} (prefers the name ${displayName})`).join(", ")}
 
 Only ping users when it's contextually relevant to the conversation. Never prepend your messages with "AI:" or "Bot:" or anything similar. Match your tone, grammar, and writing style with the previous messages in the conversation.
 
@@ -333,33 +333,15 @@ you: blame whoever programmed me but tbh it’s probably your fault too
     }),
   };
 
-  let text: string;
-  try {
-    const result = await generateText({
-      model: openrouter("openai/gpt-4o"),
-      messages: promptMessages,
-      maxTokens: 1000,
-      tools,
-      toolChoice: "auto",
-      maxSteps: 3, // enable multi-step calls
-      experimental_continueSteps: true,
-    });
-    text = result.text;
-  } catch (error) {
-    console.error("Error generating AI response:", error);
-    // Fallback response without tools
-    try {
-      const fallbackResult = await generateText({
-        model: openrouter("openai/gpt-4o"),
-        messages: promptMessages,
-        maxTokens: 1000,
-      });
-      text = fallbackResult.text;
-    } catch (fallbackError) {
-      console.error("Fallback generation also failed:", fallbackError);
-      return "sorry something went wrong with my brain rn";
-    }
-  }
+  const { text } = await generateText({
+    model: openrouter("anthropic/claude-3.5-haiku"),
+    messages: promptMessages,
+    maxTokens: 1000,
+    tools,
+    toolChoice: "auto",
+    maxSteps: 3, // enable multi-step calls
+    experimental_continueSteps: true,
+  });
 
   let processedResponse = text;
   for (const [id, username] of pingableUsers) {

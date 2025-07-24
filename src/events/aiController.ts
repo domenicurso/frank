@@ -4,22 +4,6 @@ import percent from "@/utils/percent";
 import type { Message, TextChannel } from "discord.js";
 import { Events } from "discord.js";
 
-/**
- * AI Controller for Discord Bot
- *
- * This controller handles AI-powered responses when the bot is mentioned in Discord.
- *
- * Mention Handling System:
- * 1. Fetches last 10 messages for context
- * 2. Converts Discord mentions (<@123456>) to readable @username format for AI
- * 3. Builds a reference list of pingable users [id, username] from recent conversation
- * 4. AI generates response using @username format for mentions
- * 5. Converts AI's @username mentions back to Discord <@id> format before sending
- *
- * This allows the AI to naturally reference users by name while maintaining
- * proper Discord mention functionality in the final message.
- */
-
 export const name = "AIController";
 export const type = Events.MessageCreate;
 
