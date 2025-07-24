@@ -1,7 +1,6 @@
 import { client } from "@/client";
-import { generateAIResponse } from "@/utils/aiResponse";
 import percent from "@/utils/percent";
-import type { Message, TextChannel } from "discord.js";
+import type { Message } from "discord.js";
 import { Events } from "discord.js";
 
 export const name = "AIController";
@@ -24,11 +23,12 @@ export async function execute(message: Message) {
   if (isMentioned || isReplyToBot || percent(10)) {
     if (message.channel.isTextBased()) {
       try {
-        await (message.channel as TextChannel).sendTyping();
+        // await (message.channel as TextChannel).sendTyping();
 
-        const response = await generateAIResponse(message);
+        // const response = await generateAIResponse(message);
 
-        await message.reply(response || "The message content is empty.");
+        // await message.reply(response || "The message content is empty.");
+        return;
       } catch (error) {
         console.error("Error generating AI response:", error);
         await message.reply("There was an error generating the response.");
