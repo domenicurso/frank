@@ -1,9 +1,15 @@
 import { client } from "@/client";
-import { createMemoryTools } from "@/utils/memoryTools";
+import {
+  createMemory,
+  deleteMemory,
+  getGuildMemories,
+  Memory,
+  updateMemory,
+} from "@/database";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { generateText, type CoreMessage } from "ai";
+import { generateText, tool, type CoreMessage } from "ai";
 import type { Message } from "discord.js";
-import { getGuildMemories, Memory } from "../database";
+import z from "zod";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
@@ -242,14 +248,110 @@ you: blame whoever programmed me but tbh it’s probably your fault too
   const userId = message.author.id;
   const guildId = message.guildId || "";
 
-  // Create memory tools with context
-  const memoryToolsWithContext = createMemoryTools(userId, guildId);
+  const tools = {
+    create_memory: tool({
+      description: "Store a new memory about a user or conversation",
+      parameters: z.object({
+        key: z.string().describe("Unique identifier for this memory"),
+        value: z.string().describe("The memory content to store"),
+        context: z
+          .string()
+          .optional()
+          .describe(
+            "Additional context about when/why this memory was created",
+          ),
+      }),
+      execute: async (params: {
+        key: string;
+        value: string;
+        context?: string;
+      }) => {
+        try {
+          const { key, value, context } = params;
+          const memory = await createMemory(
+            userId,
+            guildId,
+            key,
+            value,
+            context,
+          );
+          if (memory) {
+            return { message: `Memory created: ${key} = ${value}` };
+          }
+          return { message: "Failed to create memory" };
+        } catch (error) {
+          console.error("Error creating memory:", error);
+          return { message: "Failed to create memory" };
+        }
+      },
+    }),
+
+    update_memory: tool({
+      description: "Update an existing memory or create it if it doesn't exist",
+      parameters: z.object({
+        key: z
+          .string()
+          .describe("The unique identifier of the memory to update"),
+        value: z.string().describe("The new memory content"),
+        context: z
+          .string()
+          .optional()
+          .describe("Additional context about this update"),
+      }),
+      execute: async (params: {
+        key: string;
+        value: string;
+        context?: string;
+      }) => {
+        try {
+          const { key, value, context } = params;
+          const memory = await updateMemory(
+            userId,
+            guildId,
+            key,
+            value,
+            context,
+          );
+          if (memory) {
+            return { message: `Memory updated: ${key} = ${value}` };
+          }
+          return { message: "Failed to update memory" };
+        } catch (error) {
+          console.error("Error updating memory:", error);
+          return { message: "Failed to update memory" };
+        }
+      },
+    }),
+
+    delete_memory: tool({
+      description:
+        "Delete a specific memory when information is no longer relevant",
+      parameters: z.object({
+        key: z
+          .string()
+          .describe("The unique identifier of the memory to delete"),
+      }),
+      execute: async (params: { key: string }) => {
+        try {
+          const { key } = params;
+          const deleted = await deleteMemory(userId, guildId, key);
+          if (deleted) {
+            return { message: `Memory deleted: ${key}` };
+          }
+          return { message: "Memory not found or failed to delete" };
+        } catch (error) {
+          console.error("Error deleting memory:", error);
+          return { message: "Memory not found or failed to delete" };
+        }
+      },
+    }),
+  };
 
   const { text, usage } = await generateText({
     model: openrouter("openai/gpt-4.1"),
     messages: promptMessages,
     maxTokens: 1000,
-    tools: memoryToolsWithContext,
+    tools,
     toolChoice: "auto",
     maxSteps: 3, // enable multi-step calls
     experimental_continueSteps: true,
