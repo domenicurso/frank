@@ -8,7 +8,8 @@ import {
 } from "@/database";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, tool, type CoreMessage } from "ai";
-import type { Message } from "discord.js";
+import type { Message, TextChannel } from "discord.js";
+import { EmbedBuilder } from "discord.js";
 import { z } from "zod";
 
 // Configure OpenRouter with API key
@@ -268,6 +269,42 @@ you: blame whoever programmed me but tbh it’s probably your fault too
             context,
           );
           if (memory) {
+            // Send embed notification to target channel
+            try {
+              const guild = message.guild;
+              if (guild) {
+                const targetChannel = guild.channels.cache.find(
+                  (channel) => channel.name === "blasphemy",
+                );
+
+                if (targetChannel && targetChannel.isTextBased()) {
+                  const embed = new EmbedBuilder()
+                    .setTitle("🧠 Memory Created")
+                    .setColor(0x00ff00)
+                    .addFields(
+                      { name: "User", value: `<@${userId}>`, inline: true },
+                      { name: "Key", value: key, inline: true },
+                      { name: "Value", value: value, inline: false },
+                    )
+                    .setTimestamp();
+
+                  if (context) {
+                    embed.addFields({
+                      name: "Context",
+                      value: context,
+                      inline: false,
+                    });
+                  }
+
+                  await (targetChannel as TextChannel).send({
+                    embeds: [embed],
+                  });
+                }
+              }
+            } catch (embedError) {
+              console.error("Error sending memory create embed:", embedError);
+            }
+
             return `Memory created: ${key} = ${value}`;
           }
           return "Failed to create memory";
@@ -300,6 +337,42 @@ you: blame whoever programmed me but tbh it’s probably your fault too
             context,
           );
           if (memory) {
+            // Send embed notification to target channel
+            try {
+              const guild = message.guild;
+              if (guild) {
+                const targetChannel = guild.channels.cache.find(
+                  (channel) => channel.name === "blasphemy",
+                );
+
+                if (targetChannel && targetChannel.isTextBased()) {
+                  const embed = new EmbedBuilder()
+                    .setTitle("🔄 Memory Updated")
+                    .setColor(0xffaa00)
+                    .addFields(
+                      { name: "User", value: `<@${userId}>`, inline: true },
+                      { name: "Key", value: key, inline: true },
+                      { name: "New Value", value: value, inline: false },
+                    )
+                    .setTimestamp();
+
+                  if (context) {
+                    embed.addFields({
+                      name: "Context",
+                      value: context,
+                      inline: false,
+                    });
+                  }
+
+                  await (targetChannel as TextChannel).send({
+                    embeds: [embed],
+                  });
+                }
+              }
+            } catch (embedError) {
+              console.error("Error sending memory update embed:", embedError);
+            }
+
             return `Memory updated: ${key} = ${value}`;
           }
           return "Failed to update memory";
@@ -322,6 +395,33 @@ you: blame whoever programmed me but tbh it’s probably your fault too
         try {
           const deleted = await deleteMemory(userId, guildId, key);
           if (deleted) {
+            // Send embed notification to target channel
+            try {
+              const guild = message.guild;
+              if (guild) {
+                const targetChannel = guild.channels.cache.find(
+                  (channel) => channel.name === "blasphemy",
+                );
+
+                if (targetChannel && targetChannel.isTextBased()) {
+                  const embed = new EmbedBuilder()
+                    .setTitle("🗑️ Memory Deleted")
+                    .setColor(0xff0000)
+                    .addFields(
+                      { name: "User", value: `<@${userId}>`, inline: true },
+                      { name: "Deleted Key", value: key, inline: true },
+                    )
+                    .setTimestamp();
+
+                  await (targetChannel as TextChannel).send({
+                    embeds: [embed],
+                  });
+                }
+              }
+            } catch (embedError) {
+              console.error("Error sending memory delete embed:", embedError);
+            }
+
             return `Memory deleted: ${key}`;
           }
           return "Memory not found or failed to delete";
