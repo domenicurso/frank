@@ -1,5 +1,5 @@
 import { client } from "@/client";
-import { GREEN, RED, YELLOW } from "@/constants";
+import { RED, YELLOW } from "@/constants";
 import {
   createMemory,
   deleteMemory,
@@ -128,7 +128,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
                 );
 
                 if (targetChannel && targetChannel.isTextBased()) {
-                  const embed = createEmbed(GREEN, "Memory Created", value);
+                  const embed = createEmbed(YELLOW, "Memory Updated", value);
 
                   if (context) {
                     embed.addFields({
