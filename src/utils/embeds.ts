@@ -1,7 +1,7 @@
 import { EmbedBuilder } from "discord.js";
 
 /**
- * Creates a red error embed with the given message
+ * Creates an embed with the given color, title, and message
  */
 export function createEmbed(
   color: number,

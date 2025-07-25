@@ -11,8 +11,8 @@ import { buildSystemPrompt } from "@/prompts";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, tool, type CoreMessage } from "ai";
 import type { Message, TextChannel } from "discord.js";
-import { EmbedBuilder } from "discord.js";
 import { z } from "zod";
+import { createEmbed } from "./embeds";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
@@ -128,15 +128,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
                 );
 
                 if (targetChannel && targetChannel.isTextBased()) {
-                  const embed = new EmbedBuilder()
-                    .setTitle("🧠 Memory Created")
-                    .setColor(GREEN)
-                    .addFields(
-                      { name: "User", value: `<@${userId}>`, inline: true },
-                      { name: "Key", value: key, inline: true },
-                      { name: "Value", value: value, inline: false },
-                    )
-                    .setTimestamp();
+                  const embed = createEmbed(GREEN, "Memory Created", value);
 
                   if (context) {
                     embed.addFields({
@@ -196,15 +188,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
                 );
 
                 if (targetChannel && targetChannel.isTextBased()) {
-                  const embed = new EmbedBuilder()
-                    .setTitle("🔄 Memory Updated")
-                    .setColor(YELLOW)
-                    .addFields(
-                      { name: "User", value: `<@${userId}>`, inline: true },
-                      { name: "Key", value: key, inline: true },
-                      { name: "New Value", value: value, inline: false },
-                    )
-                    .setTimestamp();
+                  const embed = createEmbed(YELLOW, "Memory Updated", value);
 
                   if (context) {
                     embed.addFields({
@@ -254,14 +238,11 @@ export async function generateAIResponse(message: Message): Promise<string> {
                 );
 
                 if (targetChannel && targetChannel.isTextBased()) {
-                  const embed = new EmbedBuilder()
-                    .setTitle("🗑️ Memory Deleted")
-                    .setColor(RED)
-                    .addFields(
-                      { name: "User", value: `<@${userId}>`, inline: true },
-                      { name: "Deleted Key", value: key, inline: true },
-                    )
-                    .setTimestamp();
+                  const embed = createEmbed(
+                    RED,
+                    "Memory Deleted",
+                    `<@${userId}> deleted a memory`,
+                  );
 
                   await (targetChannel as TextChannel).send({
                     embeds: [embed],
