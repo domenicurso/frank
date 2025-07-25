@@ -11,6 +11,10 @@ export async function execute(message: Message) {
   // Ignore messages sent by the bot itself
   if (message.author.bot) return;
 
+  // Ignore messages from people on the blacklist
+  const blacklisted_ids = ["1108513363979403355"];
+  if (blacklisted_ids.includes(message.author.id)) return;
+
   // Check if bot should respond (mentioned OR replying to bot message)
   const isMentioned = message.mentions.has(client.user?.id!);
   const isReplyToBot =
