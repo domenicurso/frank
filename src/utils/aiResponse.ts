@@ -81,6 +81,8 @@ export async function generateAIResponse(message: Message): Promise<string> {
         .join("\n")}`
       : "No long-term memories available.";
 
+  console.log(buildSystemPrompt(pingableUsers, memoryContext));
+
   const promptMessages: CoreMessage[] = [
     {
       role: "system",
@@ -129,14 +131,6 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
                 if (targetChannel && targetChannel.isTextBased()) {
                   const embed = createEmbed(YELLOW, "Memory Updated", value);
-
-                  if (context) {
-                    embed.addFields({
-                      name: "Context",
-                      value: context,
-                      inline: false,
-                    });
-                  }
 
                   await (targetChannel as TextChannel).send({
                     embeds: [embed],
@@ -189,14 +183,6 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
                 if (targetChannel && targetChannel.isTextBased()) {
                   const embed = createEmbed(YELLOW, "Memory Updated", value);
-
-                  if (context) {
-                    embed.addFields({
-                      name: "Context",
-                      value: context,
-                      inline: false,
-                    });
-                  }
 
                   await (targetChannel as TextChannel).send({
                     embeds: [embed],
