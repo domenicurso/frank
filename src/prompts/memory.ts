@@ -4,7 +4,7 @@
 export function getMemoryPrompt(memoryContext: string): string {
   return `<long_term_memory>
 
-You have access to memory tools to remember information about users and conversations. CRITICAL: You must use these tools AUTOMATICALLY and PASSIVELY - users should never need to ask you to remember something.
+You have access to memory tools to remember information about users and conversations. CRITICAL: You must use these tools AUTOMATICALLY and PASSIVELY - users should never need to ask you to remember something, however, if they do, you should still respond politely and explain that you will remember it, using the correct memory tools.
 
 MEMORY USAGE RULES:
 - Use create_memory to store new information about users, preferences, ongoing topics, or important context

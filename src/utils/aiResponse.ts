@@ -92,6 +92,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
         const repliedMessage = await message.channel.messages.fetch(
           msg.reference.messageId,
         );
+        // if its a reply to a message
         if (repliedMessage) {
           // Truncate the replied message content if it's too long
           const repliedContent =
