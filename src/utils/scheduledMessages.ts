@@ -9,6 +9,8 @@ export interface ScheduledMessageData {
   targetUserIds: string[];
   scheduledTime: Date;
   message: string;
+  recurringInterval?: number;
+  maxOccurrences?: number;
 }
 
 export async function createScheduledMessage(data: ScheduledMessageData) {
@@ -21,6 +23,9 @@ export async function createScheduledMessage(data: ScheduledMessageData) {
       scheduledTime: data.scheduledTime,
       message: data.message,
       sent: false,
+      recurringInterval: data.recurringInterval,
+      maxOccurrences: data.maxOccurrences,
+      occurrenceCount: 0,
     });
 
     return scheduledMessage;
@@ -56,6 +61,9 @@ export async function getUserScheduledMessages(
       targetUserIds: JSON.parse(msg.targetUserIds),
       scheduledTime: msg.scheduledTime,
       message: msg.message,
+      recurringInterval: msg.recurringInterval,
+      maxOccurrences: msg.maxOccurrences,
+      occurrenceCount: msg.occurrenceCount,
       createdAt: msg.createdAt,
     }));
   } catch (error) {
@@ -104,6 +112,9 @@ export async function getGuildScheduledMessages(guildId: string) {
       targetUserIds: JSON.parse(msg.targetUserIds),
       scheduledTime: msg.scheduledTime,
       message: msg.message,
+      recurringInterval: msg.recurringInterval,
+      maxOccurrences: msg.maxOccurrences,
+      occurrenceCount: msg.occurrenceCount,
       createdAt: msg.createdAt,
     }));
   } catch (error) {

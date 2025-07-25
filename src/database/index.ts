@@ -95,6 +95,9 @@ export class ScheduledMessage extends Model {
   declare scheduledTime: Date;
   declare message: string;
   declare sent: boolean;
+  declare recurringInterval?: number; // Interval in minutes, null for non-recurring
+  declare maxOccurrences?: number; // Max number of times to send, null for infinite
+  declare occurrenceCount: number; // How many times it has been sent
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -133,6 +136,21 @@ ScheduledMessage.init(
     sent: {
       type: DataTypes.BOOLEAN,
       defaultValue: false,
+    },
+    recurringInterval: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: "Interval in minutes for recurring messages",
+    },
+    maxOccurrences: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: "Maximum number of occurrences, null for infinite",
+    },
+    occurrenceCount: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      comment: "Number of times this message has been sent",
     },
   },
   {
@@ -349,8 +367,7 @@ export class Memory extends Model {
   declare userId: string;
   declare guildId: string;
   declare key: string;
-  declare value: string;
-  declare context?: string;
+  declare content: string;
   declare createdAt?: Date;
   declare updatedAt?: Date;
 }
@@ -433,13 +450,9 @@ Memory.init(
       type: DataTypes.STRING,
       allowNull: false,
     },
-    value: {
+    content: {
       type: DataTypes.TEXT,
       allowNull: false,
-    },
-    context: {
-      type: DataTypes.TEXT,
-      allowNull: true,
     },
   },
   {
@@ -867,8 +880,7 @@ export async function createMemory(
   userId: string,
   guildId: string,
   key: string,
-  value: string,
-  context?: string,
+  content: string,
 ) {
   try {
     // Delete existing memory with same key for this user/guild
@@ -881,8 +893,7 @@ export async function createMemory(
       userId,
       guildId,
       key,
-      value,
-      context,
+      content,
     });
     return memory;
   } catch (error) {
@@ -895,16 +906,14 @@ export async function updateMemory(
   userId: string,
   guildId: string,
   key: string,
-  value: string,
-  context?: string,
+  content: string,
 ) {
   try {
     const [memory, created] = await Memory.upsert({
       userId,
       guildId,
       key,
-      value,
-      context,
+      content,
     });
     return memory;
   } catch (error) {

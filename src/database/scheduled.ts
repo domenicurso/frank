@@ -1,5 +1,9 @@
 import { client } from "@/client";
-import { checkScheduledMessages, markMessageAsSent } from "@/database/index";
+import {
+  checkScheduledMessages,
+  markMessageAsSent,
+  ScheduledMessage,
+} from "@/database/index";
 import chalk from "chalk";
 
 // Scheduled message checker - runs every minute
@@ -28,6 +32,38 @@ export async function processScheduledMessages() {
         await channel.send(
           `${mentions}\n\n📢 **${senderName} scheduled this ping:**\n${message.message}`,
         );
+
+        // Handle recurring messages
+        if (message.recurringInterval) {
+          const newOccurrenceCount = (message.occurrenceCount || 0) + 1;
+
+          // Check if we should continue recurring
+          const shouldContinue =
+            !message.maxOccurrences ||
+            newOccurrenceCount < message.maxOccurrences;
+
+          if (shouldContinue) {
+            // Create next occurrence
+            const nextScheduledTime = new Date(
+              message.scheduledTime.getTime() +
+                message.recurringInterval * 60 * 1000,
+            );
+
+            await ScheduledMessage.create({
+              userId: message.userId,
+              guildId: message.guildId,
+              channelId: message.channelId,
+              targetUserIds: message.targetUserIds,
+              scheduledTime: nextScheduledTime,
+              message: message.message,
+              sent: false,
+              recurringInterval: message.recurringInterval,
+              maxOccurrences: message.maxOccurrences,
+              occurrenceCount: newOccurrenceCount,
+            });
+          }
+        }
+
         await markMessageAsSent(message.id);
       } catch (error) {
         console.error(

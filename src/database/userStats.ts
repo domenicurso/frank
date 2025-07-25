@@ -165,6 +165,28 @@ export async function getTopMessageUsers(
 }
 
 /**
+ * Get recently active users in a guild sorted by lastActive
+ */
+export async function getRecentlyActiveUsers(
+  guildId: string,
+  limit: number = 20,
+): Promise<UserStats[]> {
+  try {
+    return await UserStats.findAll({
+      where: { guildId },
+      order: [["lastActive", "DESC"]],
+      limit,
+    });
+  } catch (error) {
+    console.error(
+      chalk.red("[DB] Error getting recently active users:"),
+      error,
+    );
+    return [];
+  }
+}
+
+/**
  * Get total stats for a guild
  */
 export async function getGuildStats(guildId: string): Promise<{

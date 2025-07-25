@@ -7,6 +7,11 @@ import {
   getTimeUntilScheduled,
   getUserScheduledMessages,
 } from "@/utils/scheduledMessages";
+import {
+  formatScheduleInterval,
+  parseScheduleInterval,
+  parseScheduleTime,
+} from "@/utils/scheduleHelpers";
 import chalk from "chalk";
 import {
   ChatInputCommandInteraction,
@@ -54,6 +59,21 @@ export const definition = new SlashCommandBuilder()
           .setName("users")
           .setDescription("Users to ping")
           .setRequired(false),
+      )
+      .addStringOption((option) =>
+        option
+          .setName("interval")
+          .setDescription("Recurring interval (e.g., '30m', '2h', '1d', '1w')")
+          .setRequired(false),
+      )
+      .addIntegerOption((option) =>
+        option
+          .setName("max_occurrences")
+          .setDescription(
+            "Maximum number of times to send (leave empty for infinite)",
+          )
+          .setRequired(false)
+          .setMinValue(1),
       ),
   );
 
@@ -105,9 +125,18 @@ async function handleList(interaction: ChatInputCommandInteraction) {
       const timeUntil = getTimeUntilScheduled(msg.scheduledTime);
       const formattedTime = formatScheduledTime(msg.scheduledTime);
 
+      let recurringInfo = "";
+      if (msg.recurringInterval) {
+        const intervalText = formatScheduleInterval(msg.recurringInterval);
+        const occurrenceText = msg.maxOccurrences
+          ? `${msg.occurrenceCount}/${msg.maxOccurrences}`
+          : `${msg.occurrenceCount}/∞`;
+        recurringInfo = `\n**Recurring:** Every ${intervalText} (${occurrenceText})`;
+      }
+
       return {
         name: `#${msg.id} - ${timeUntil}`,
-        value: `**Time:** ${formattedTime}\n**Users:** ${targetUsers}\n**Message:** ${msg.message.length > 100 ? msg.message.substring(0, 100) + "..." : msg.message}`,
+        value: `**Time:** ${formattedTime}\n**Users:** ${targetUsers}${recurringInfo}\n**Message:** ${msg.message.length > 100 ? msg.message.substring(0, 100) + "..." : msg.message}`,
         inline: false,
       };
     });
@@ -190,6 +219,8 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
   const timeInput = interaction.options.getString("time", true);
   const usersInput = interaction.options.getString("users") || "";
   const messageInput = interaction.options.getString("message", true);
+  const intervalInput = interaction.options.getString("interval");
+  const maxOccurrences = interaction.options.getInteger("max_occurrences");
 
   const userMentions = usersInput.match(/<@!?(\d+)>/g) || [];
 
@@ -199,8 +230,27 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
     targetUserIds.push(userId);
   }
 
+  // Parse interval if provided
+  let recurringInterval: number | null = null;
+  if (intervalInput) {
+    recurringInterval = parseScheduleInterval(intervalInput);
+    if (!recurringInterval) {
+      await interaction.reply({
+        embeds: [
+          createEmbed(
+            RED,
+            "Invalid interval format",
+            "Try formats like: `30m`, `2h`, `1d`, `1w`\n• m = minutes\n• h = hours\n• d = days\n• w = weeks",
+          ),
+        ],
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+  }
+
   // Parse time
-  const scheduledTime = parseTime(timeInput);
+  const scheduledTime = parseScheduleTime(timeInput);
   if (!scheduledTime) {
     await interaction.reply({
       embeds: [
@@ -240,6 +290,9 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
       scheduledTime,
       message: messageInput,
       sent: false,
+      recurringInterval,
+      maxOccurrences,
+      occurrenceCount: 0,
     });
 
     // Get usernames for confirmation
@@ -264,12 +317,21 @@ async function handleAdd(interaction: ChatInputCommandInteraction) {
       timeZoneName: "short",
     });
 
+    let recurringText = "";
+    if (recurringInterval) {
+      const intervalText = formatScheduleInterval(recurringInterval);
+      const occurrenceText = maxOccurrences
+        ? ` (max ${maxOccurrences} times)`
+        : " (infinite)";
+      recurringText = `\n**Recurring:** Every ${intervalText}${occurrenceText}`;
+    }
+
     await interaction.reply({
       embeds: [
         createEmbed(
           GREEN,
           "Scheduled ping set!",
-          `**Time:** ${formattedTime}\n**Users:** ${usernames.join(", ")}\n**Message:** "${messageInput}"`,
+          `**Time:** ${formattedTime}\n**Users:** ${usernames.join(", ")}${recurringText}\n**Message:** "${messageInput}"`,
         ),
       ],
       flags: MessageFlags.Ephemeral,

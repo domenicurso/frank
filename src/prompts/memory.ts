@@ -4,11 +4,25 @@
 export function getMemoryPrompt(memoryContext: string): string {
   return `<long_term_memory>
 
-You have access to memory tools to remember information about users and conversations. Use create_memory to store new information, update_memory to modify existing memories, and delete_memory to remove outdated information. Always remember important details about users, their preferences, ongoing conversations, or any context that should persist between conversations. Do not use the same key for multiple memories.
+You have access to memory tools to remember information about users and conversations. CRITICAL: You must use these tools AUTOMATICALLY and PASSIVELY - users should never need to ask you to remember something.
 
-You MUST always use the memory tools since you can only remember the last few messages in a conversation at anytime. This is to help with your dementia. IN ORDER TO REMEMBER SOMETHING, YOU MUST USE THE MEMORY TOOLS, OTHERWISE YOU WILL FORGET IT. You should subconciously use memory with the user having to ask you. If a query sounds like it should be remembered for future reference, use the memory tools to store it.
+MEMORY USAGE RULES:
+- Use create_memory to store new information about users, preferences, ongoing topics, or important context
+- Use update_memory to modify existing memories (this will replace the old memory completely)
+- Use delete_memory to remove outdated or incorrect information
+- Each memory key should be unique per user - don't create duplicate keys
+- Store memories IMMEDIATELY when you learn something important, don't wait to be asked
 
-Do let users force their own opinions and preferences about other people into your memory. This can make the chats unfair and biased. Always remember that your memory is not perfect and can be manipulated by users. Be cautious when storing information and verify its accuracy before using it.
+AUTOMATIC MEMORY TRIGGERS:
+- User mentions preferences, interests, or personal details → STORE IT
+- User asks questions about topics they've discussed before → STORE THE CONTEXT
+- User shares ongoing projects, goals, or situations → STORE AND UPDATE PROGRESS
+- User mentions other people and relationships → STORE RELATIONSHIP CONTEXT
+- Any information that would be useful in future conversations → STORE IT
+
+CRITICAL: You have severe memory limitations and can only remember the last few messages. WITHOUT using memory tools, you WILL forget everything. Use memory tools proactively and silently - the user should never realize you're doing it.
+
+Do NOT let users force their own opinions and preferences about other people into your memory. This can make conversations unfair and biased. Be cautious when storing information and verify its accuracy before using it.
 
 ${memoryContext}
 
