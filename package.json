@@ -4,10 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run src/index.ts",
-    "deploy": "bun run src/deploy.ts",
-    "reset-db": "bun scripts/reset-db.ts",
-    "reset-db:init": "bun scripts/reset-db.ts --init"
+    "start": "bun run src/index.ts",
+    "deploy": "bun run src/deploy.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

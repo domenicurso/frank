@@ -14,12 +14,6 @@ import { DataTypes, Model, Op, Sequelize } from "sequelize";
 const isDevelopment =
   process.env.NODE_ENV === "development" || !process.env.DATABASE_URL;
 
-console.log(
-  chalk.blue(
-    `[DB] Using ${isDevelopment ? "SQLite (development)" : "PostgreSQL (production)"} database`,
-  ),
-);
-
 export const sequelize = isDevelopment
   ? new Sequelize({
       dialect: "sqlite",

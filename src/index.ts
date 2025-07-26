@@ -195,6 +195,13 @@ console.log();
 
 // Initialize database before logging in
 try {
+  const isDevelopment =
+    process.env.NODE_ENV === "development" || !process.env.DATABASE_URL;
+  console.log(
+    chalk.blue(
+      `[DB] Using ${isDevelopment ? "SQLite (development)" : "PostgreSQL (production)"} database`,
+    ),
+  );
   await initializeDatabase();
   console.log(chalk.green("\nDatabase initialized successfully!"));
 } catch (error) {
