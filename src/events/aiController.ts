@@ -12,7 +12,7 @@ export async function execute(message: Message) {
   if (message.author.bot) return;
 
   // Ignore messages from people on the blacklist
-  const blacklisted_ids = [];
+  const blacklisted_ids: string[] = [];
   if (blacklisted_ids.includes(message.author.id)) return;
 
   // Check if bot should respond (mentioned OR replying to bot message)
