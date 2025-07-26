@@ -466,6 +466,10 @@ Memory.init(
       {
         fields: ["key"],
       },
+      {
+        unique: true,
+        fields: ["guildId", "key"],
+      },
     ],
   },
 );
@@ -876,6 +880,24 @@ export async function removeChannelLock(channelId: string, guildId: string) {
 }
 
 // Memory utility functions
+/**
+ * Check if a memory key is already taken in a guild
+ */
+export async function isMemoryKeyTaken(
+  guildId: string,
+  key: string,
+): Promise<boolean> {
+  try {
+    const existingMemory = await Memory.findOne({
+      where: { guildId, key },
+    });
+    return existingMemory !== null;
+  } catch (error) {
+    console.error(chalk.red("[DB] Error checking memory key:"), error);
+    return false;
+  }
+}
+
 export async function createMemory(
   userId: string,
   guildId: string,
@@ -883,10 +905,12 @@ export async function createMemory(
   content: string,
 ) {
   try {
-    // Delete existing memory with same key for this user/guild
-    await Memory.destroy({
-      where: { userId, guildId, key },
-    });
+    // Check if key already exists in this guild
+    const keyTaken = await isMemoryKeyTaken(guildId, key);
+    if (keyTaken) {
+      console.error(chalk.red("[DB] Memory key already exists in guild:"), key);
+      return null;
+    }
 
     // Create new memory
     const memory = await Memory.create({
@@ -909,13 +933,27 @@ export async function updateMemory(
   content: string,
 ) {
   try {
-    const [memory, created] = await Memory.upsert({
-      userId,
-      guildId,
-      key,
-      content,
+    // First try to find existing memory by key in guild
+    const existingMemory = await Memory.findOne({
+      where: { guildId, key },
     });
-    return memory;
+
+    if (existingMemory) {
+      // Update existing memory (regardless of who created it)
+      existingMemory.content = content;
+      existingMemory.userId = userId; // Update the userId to current user
+      await existingMemory.save();
+      return existingMemory;
+    } else {
+      // Create new memory if none exists
+      const memory = await Memory.create({
+        userId,
+        guildId,
+        key,
+        content,
+      });
+      return memory;
+    }
   } catch (error) {
     console.error(chalk.red("[DB] Error updating memory:"), error);
     return null;
@@ -929,7 +967,7 @@ export async function deleteMemory(
 ) {
   try {
     const deleted = await Memory.destroy({
-      where: { userId, guildId, key },
+      where: { guildId, key },
     });
     return deleted > 0;
   } catch (error) {

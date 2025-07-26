@@ -4,22 +4,23 @@ import {
   createMemory,
   deleteMemory,
   getGuildMemories,
+  isMemoryKeyTaken,
   Memory,
   ScheduledMessage,
   updateMemory,
 } from "@/database";
 import { getRecentlyActiveUsers } from "@/database/userStats";
 import { buildSystemPrompt } from "@/prompts";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { generateText, tool, type CoreMessage } from "ai";
-import type { Message, TextChannel } from "discord.js";
-import { z } from "zod";
-import { createEmbed } from "./embeds";
+import { createEmbed } from "@/utils/embeds";
 import {
   formatScheduleInterval,
   parseScheduleInterval,
   parseScheduleTime,
-} from "./scheduleHelpers";
+} from "@/utils/scheduleHelpers";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { generateText, tool, type CoreMessage } from "ai";
+import type { Message, TextChannel } from "discord.js";
+import { z } from "zod";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
@@ -164,6 +165,12 @@ export async function generateAIResponse(message: Message): Promise<string> {
       }),
       execute: async ({ key, content }) => {
         try {
+          // Check if key already exists in this guild
+          const keyExists = await isMemoryKeyTaken(guildId, key);
+          if (keyExists) {
+            return `Memory key '${key}' already exists in this server. Use update_memory to modify existing memories or use create_memory with a different key.`;
+          }
+
           const memory = await createMemory(userId, guildId, key, content);
           if (memory) {
             // Send embed notification to target channel
@@ -188,7 +195,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
             return `Memory created: ${key} = ${content}`;
           }
-          return "Failed to create memory";
+          return `Failed to create memory - key '${key}' already exists in this server. Use update_memory to modify existing memories or use create_memory with a different key.`;
         } catch (error) {
           console.error("Error creating memory:", error);
           return "Failed to create memory";
