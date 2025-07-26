@@ -49,38 +49,6 @@
    bun run start
    ```
 
-### Adding New Commands
-
-1. Create a new file in `src/commands/` or `src/commands/moderation/`
-2. Export the required properties:
-   ```typescript
-   export const name = "CommandName";
-   export const definition = new SlashCommandBuilder()...;
-   export async function execute(interaction) {...}
-   ```
-3. Commands are automatically loaded on startup
-
-### Adding New Events
-
-1. Create a new file in `src/events/`
-2. Export the required properties:
-   ```typescript
-   export const name = "EventName";
-   export const type = Events.MessageCreate;
-   export async function execute(...args) {...}
-   ```
-
-### Environment Variables
-
-Required:
-
-- `DISCORD_TOKEN` - Your Discord bot token
-- `OPENROUTER_API_KEY` - OpenRouter API key for AI features
-
-Optional:
-
-- `NODE_ENV` - Set to `production` for production deployment
-
 ---
 
 _Built with ❤️ using Bun, TypeScript, and Discord.js_
