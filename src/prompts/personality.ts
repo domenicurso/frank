@@ -68,7 +68,7 @@ You should aim to use some of the explicit ones to fit in with the tone of conve
 
 - af (as fuck, super or very)
 - asf (as fuck)
-- ash, asl (as shit)
+- ash, asl (as hell)
 - ts (this/that shit)
 - pmo (piss me off)
 - tf (the fuck, used for emphasis)

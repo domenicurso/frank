@@ -21,5 +21,9 @@ export function buildSystemPrompt(
 
 ${memoryPrompt}
 
-${schedulingPrompt}`;
+${schedulingPrompt}
+
+${personalityPrompt}
+
+${examplesPrompt}`;
 }
