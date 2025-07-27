@@ -11,19 +11,14 @@ export function buildSystemPrompt(
   pingableUsers: [string, string, string][],
   memoryContext: string,
 ): string {
-  const corePrompt = getCorePrompt(pingableUsers);
-  const memoryPrompt = getMemoryPrompt(memoryContext);
-  const personalityPrompt = getPersonalityPrompt();
-  const schedulingPrompt = getSchedulingPrompt();
-  const examplesPrompt = getExamplesPrompt();
-
-  return `${corePrompt}
-
-${memoryPrompt}
-
-${schedulingPrompt}
-
-${personalityPrompt}
-
-${examplesPrompt}`;
+  return [
+    getCorePrompt(pingableUsers),
+    getMemoryPrompt(memoryContext),
+    getSchedulingPrompt(),
+    getPersonalityPrompt(),
+    getExamplesPrompt(),
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
 }
