@@ -22,3 +22,5 @@ export function buildSystemPrompt(
     .join("\n\n")
     .trim();
 }
+
+console.log(buildSystemPrompt([], ""));

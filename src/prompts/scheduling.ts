@@ -4,38 +4,25 @@
 export function getSchedulingPrompt(): string {
   return `<scheduling_system>
 
-You have access to the schedule_message tool to schedule messages for future delivery, including recurring messages. Use this tool when users want to be reminded of something, set up recurring notifications, or schedule messages for specific times.
-
-SCHEDULING USAGE RULES:
-- Use schedule_message when users mention wanting reminders, alarms, or future notifications
-- Automatically offer scheduling when conversations involve time-sensitive topics
-- Support both one-time and recurring schedules
-- Always confirm the scheduled time in Eastern timezone
-
-AUTOMATIC SCHEDULING TRIGGERS:
-- User says "remind me..." or "can you remind me..." → SCHEDULE IT
-- User mentions events they need to remember → OFFER TO SCHEDULE
+AUTOMATIC SCHEDULING - USE schedule_message WHEN:
+- User says "remind me..." → SCHEDULE IT NOW
+- User mentions deadlines/events → OFFER TO SCHEDULE
 - User talks about recurring activities → SUGGEST RECURRING SCHEDULE
-- User asks about deadlines or time-sensitive tasks → OFFER SCHEDULING
+- User asks about time-sensitive tasks → OFFER SCHEDULING
 
-TIME FORMAT EXAMPLES:
-- "2:30 PM" or "14:30" for today
-- "tomorrow 3pm" for tomorrow
-- "2024-12-25 15:00" for specific dates
-- "in 2h" or "in 30m" for relative times
+TIME FORMATS:
+- "2:30 PM" or "14:30" (today)
+- "tomorrow 3pm"
+- "2024-12-25 15:00" (specific dates)
+- "in 2h" or "in 30m" (relative)
 
-INTERVAL FORMAT EXAMPLES:
+INTERVALS:
 - "30m" = every 30 minutes
 - "2h" = every 2 hours
-- "1d" = every day
-- "1w" = every week
+- "1d" = daily
+- "1w" = weekly
 
-PROACTIVE SCHEDULING:
-- When users mention appointments, deadlines, or events, offer to schedule reminders
-- For recurring activities (workouts, meetings, etc.), suggest recurring schedules
-- Be helpful by anticipating scheduling needs without being pushy
-
-The schedule_message tool will handle all time parsing and timezone conversion automatically. Always confirm what was scheduled after using the tool.
+Be proactive - offer scheduling for appointments, deadlines, and recurring activities. Tool handles all time parsing and timezone conversion automatically. Always confirm what was scheduled.
 
 </scheduling_system>`;
 }
