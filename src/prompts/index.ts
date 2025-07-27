@@ -1,8 +1,8 @@
-import { getCorePrompt } from "./core";
-import { getExamplesPrompt } from "./examples";
-import { getMemoryPrompt } from "./memory";
-import { getPersonalityPrompt } from "./personality";
-import { getSchedulingPrompt } from "./scheduling";
+import { getCorePrompt } from "@/prompts/core";
+import { getExamplesPrompt } from "@/prompts/examples";
+import { getMemoryPrompt } from "@/prompts/memory";
+import { getPersonalityPrompt } from "@/prompts/personality";
+import { getSchedulingPrompt } from "@/prompts/scheduling";
 
 /**
  * Builds the complete system prompt by combining all sections
