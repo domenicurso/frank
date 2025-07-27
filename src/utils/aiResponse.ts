@@ -21,6 +21,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, tool, type CoreMessage } from "ai";
 import type { Message, TextChannel } from "discord.js";
 import { z } from "zod";
+import { sendModLog } from "./moderation";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
@@ -86,16 +87,25 @@ export async function generateAIResponse(message: Message): Promise<string> {
       );
     }
 
-    // Check if this message is a reply
     let replyContext = "";
     if (msg.reference && msg.reference.messageId) {
       try {
         const repliedMessage = await message.channel.messages.fetch(
           msg.reference.messageId,
         );
-        // if its a reply to a message
-        if (repliedMessage) {
-          // Truncate the replied message content if it's too long
+
+        // Fetch the previous message (before the current message)
+        const messages = await message.channel.messages.fetch({
+          before: message.id,
+          limit: 1,
+        });
+        const previousMessage = messages.first();
+
+        // If the reply is NOT to the immediately preceding message, set context
+        if (
+          repliedMessage &&
+          (!previousMessage || repliedMessage.id !== previousMessage.id)
+        ) {
           const repliedContent =
             repliedMessage.content.length > 80
               ? repliedMessage.content.substring(0, 80) + "..."
@@ -151,6 +161,16 @@ export async function generateAIResponse(message: Message): Promise<string> {
   // Generate AI response using OpenRouter with memory tools
   const userId = message.author.id;
   const guildId = message.guildId || "";
+
+  sendModLog(client, message.guild!, {
+    action: "AI Response Generated",
+    target: message.author,
+    additional: {
+      system_prompt: buildSystemPrompt(pingableUsers, memoryContext),
+      user_id: userId,
+      guild_id: guildId,
+    },
+  });
 
   const tools = {
     create_memory: tool({
