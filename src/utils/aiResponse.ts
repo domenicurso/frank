@@ -166,7 +166,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
     action: "AI Response Generated",
     target: message.author,
     additional: {
-      system_prompt: buildSystemPrompt(pingableUsers, memoryContext),
+      user_message: `The recent conversation is as follows:\n\n${messageHistory}\n\nPlease respond to the latest message from @${message.author.username}.`,
       user_id: userId,
       guild_id: guildId,
     },
