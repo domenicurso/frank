@@ -32,28 +32,22 @@ const openrouter = createOpenRouter({
  * Generates AI response using conversation context and user mentions
  */
 export async function generateAIResponse(message: Message): Promise<string> {
-  // Fetch the last 15 messages for context
+  // Fetch the last 15 messages for context (optimized limit)
   const messages = await message.channel.messages.fetch({ limit: 15 });
 
-  // Get recently active users from user stats instead of just from recent messages
-  const recentActiveUsers = await getRecentlyActiveUsers(
-    message.guildId || "",
-    20,
-  );
+  // Optimize user context building
+  const userMap = new Map<string, { username: string; displayName: string }>();
   const recentUsers: [string, string, string][] = [];
   const processedMessages: string[] = [];
 
-  // Build a map of all users we might encounter
-  const userMap = new Map<string, { username: string; displayName: string }>();
-
-  // Add users from recent messages first
+  // Build user map from recent messages first (more efficient)
   for (const msg of messages.values()) {
     userMap.set(msg.author.id, {
       username: msg.author.username,
       displayName: msg.author.displayName,
     });
 
-    // Also add mentioned users
+    // Add mentioned users
     for (const [userId, user] of msg.mentions.users) {
       userMap.set(userId, {
         username: user.username,
@@ -62,22 +56,44 @@ export async function generateAIResponse(message: Message): Promise<string> {
     }
   }
 
-  // Convert to recentUsers format, prioritizing recently active users
-  for (const stats of recentActiveUsers) {
-    const userData = userMap.get(stats.userId);
-    if (userData && !recentUsers.some(([id]) => id === stats.userId)) {
-      recentUsers.push([stats.userId, userData.username, userData.displayName]);
+  // Get recently active users (limit to 15 for performance)
+  try {
+    const recentActiveUsers = await getRecentlyActiveUsers(
+      message.guildId || "",
+      15,
+    );
+
+    // Prioritize recently active users
+    for (const stats of recentActiveUsers) {
+      const userData = userMap.get(stats.userId);
+      if (userData && !recentUsers.some(([id]) => id === stats.userId)) {
+        recentUsers.push([
+          stats.userId,
+          userData.username,
+          userData.displayName,
+        ]);
+      }
     }
+  } catch (error) {
+    console.error("Error fetching recently active users:", error);
   }
 
-  // Add any remaining users from recent messages
+  // Add remaining users from recent messages
   for (const [userId, userData] of userMap) {
     if (!recentUsers.some(([id]) => id === userId)) {
       recentUsers.push([userId, userData.username, userData.displayName]);
     }
   }
 
-  for (const msg of Array.from(messages.values()).reverse()) {
+  // Process messages more efficiently
+  const messageArray = Array.from(messages.values()).reverse();
+
+  for (let i = 0; i < messageArray.length; i++) {
+    const msg = messageArray[i]!;
+
+    // Skip empty messages
+    if (!msg.content.trim() && msg.attachments.size === 0) continue;
+
     // Replace mentions with usernames
     let processedContent = msg.content;
     for (const [userId, user] of msg.mentions.users) {
@@ -87,90 +103,123 @@ export async function generateAIResponse(message: Message): Promise<string> {
       );
     }
 
+    // Handle attachments
+    if (msg.attachments.size > 0) {
+      const attachmentTypes = Array.from(msg.attachments.values())
+        .map((att) => att.contentType?.split("/")[0] || "file")
+        .join(", ");
+      processedContent += ` [shared ${attachmentTypes}]`;
+    }
+
+    // Optimize reply context - check if reply target is in recent messages first
     let replyContext = "";
-    if (msg.reference && msg.reference.messageId) {
-      try {
-        const repliedMessage = await message.channel.messages.fetch(
-          msg.reference.messageId,
-        );
+    if (msg.reference?.messageId) {
+      // First check if replied message is in our fetched messages
+      const repliedMessage = messageArray.find(
+        (m) => m.id === msg.reference?.messageId,
+      );
 
-        // Fetch the previous message (before the current message)
-        const messages = await message.channel.messages.fetch({
-          before: message.id,
-          limit: 1,
-        });
-        const previousMessage = messages.first();
-
-        // If the reply is NOT to the immediately preceding message, set context
-        if (
-          repliedMessage &&
-          (!previousMessage || repliedMessage.id !== previousMessage.id)
-        ) {
-          const repliedContent =
-            repliedMessage.content.length > 80
-              ? repliedMessage.content.substring(0, 80) + "..."
-              : repliedMessage.content;
-          replyContext = ` (replying to @${repliedMessage.author.username}: "${repliedContent}")`;
+      if (repliedMessage) {
+        const repliedContent =
+          repliedMessage.content.length > 60
+            ? repliedMessage.content.substring(0, 60) + "..."
+            : repliedMessage.content;
+        replyContext = ` (replying to @${repliedMessage.author.username}: "${repliedContent}")`;
+      } else {
+        // Only fetch if not in recent messages
+        try {
+          const fetchedReply = await msg.channel.messages.fetch(
+            msg.reference.messageId,
+          );
+          if (fetchedReply) {
+            const repliedContent =
+              fetchedReply.content.length > 60
+                ? fetchedReply.content.substring(0, 60) + "..."
+                : fetchedReply.content;
+            replyContext = ` (replying to @${fetchedReply.author.username}: "${repliedContent}")`;
+          }
+        } catch {
+          replyContext = " (replying to a message)";
         }
-      } catch (error) {
-        // If we can't fetch the replied message, just indicate it's a reply
-        replyContext = " (replying to a message)";
       }
     }
 
+    // Limit message length for token efficiency
+    const truncatedContent =
+      processedContent.length > 200
+        ? processedContent.substring(0, 200) + "..."
+        : processedContent;
+
     processedMessages.push(
-      `@${msg.author.username} said: ${processedContent}${replyContext}`,
+      `@${msg.author.username}: ${truncatedContent}${replyContext}`,
     );
   }
 
-  const messageHistory = processedMessages.join("\n");
+  // Optimize context building
+  const messageHistory = processedMessages.slice(-15).join("\n");
   const pingableUsers = recentUsers
-    .filter(
-      ([_id, username, _displayName]) => username !== client.user?.username,
-    )
-    .slice(0, 10); // Limit to recent users
+    .filter(([_id, username]) => username !== client.user?.username)
+    .slice(0, 8); // Reduce to 8 users for token efficiency
 
-  // Fetch memories for this guild (limit to recent 20)
-  const memories = await getGuildMemories(message.guildId || "");
-  const recentMemories = memories.slice(0, 20);
+  // Fetch and format memories more efficiently
+  let memoryContext = "No relevant memories.";
+  try {
+    const memories = await getGuildMemories(message.guildId || "");
+    const recentMemories = memories.slice(0, 15); // Reduce memory limit
 
-  const memoryContext =
-    recentMemories.length > 0
-      ? `Your long-term memories:
-      ${recentMemories
+    if (recentMemories.length > 0) {
+      const formattedMemories = recentMemories
         .map((m: Memory) => {
-          // Try to find username from recent users, fallback to user ID
           const user = recentUsers.find(([id]) => id === m.userId);
-          const userDisplay = user ? `@${user[1]}` : `User(${m.userId})`;
-          return `- ${userDisplay}: ${m.key} = ${m.content}`;
+          const userDisplay = user
+            ? `@${user[1]}`
+            : `User(${m.userId.substring(0, 8)})`;
+          // Truncate memory content for token efficiency
+          const content =
+            m.content.length > 400
+              ? m.content.substring(0, 400) + "..."
+              : m.content;
+          return `- ${userDisplay}: ${m.key} = ${content}`;
         })
-        .join("\n")}`
-      : "No long-term memories available.";
+        .join("\n");
+
+      memoryContext = `Relevant memories:\n${formattedMemories}`;
+    }
+  } catch (error) {
+    console.error("Error fetching memories:", error);
+  }
+
+  // Build optimized prompt
+  const systemPrompt = buildSystemPrompt(pingableUsers, memoryContext);
+  const userPrompt = `Recent conversation:\n${messageHistory}\n\nRespond to @${message.author.username}'s latest message. Keep responses conversational and engaging.`;
 
   const promptMessages: CoreMessage[] = [
     {
       role: "system",
-      content: buildSystemPrompt(pingableUsers, memoryContext),
+      content: systemPrompt,
     },
     {
       role: "user",
-      content: `The recent conversation is as follows:\n\n${messageHistory}\n\nPlease respond to the latest message from @${message.author.username}.`,
+      content: userPrompt,
     },
   ];
 
-  // Generate AI response using OpenRouter with memory tools
+  // Prepare for AI generation
   const userId = message.author.id;
   const guildId = message.guildId || "";
 
-  sendModLog(client, message.guild!, {
-    action: "AI Response Generated",
-    target: message.author,
-    additional: {
-      user_message: `The recent conversation is as follows:\n\n${messageHistory}\n\nPlease respond to the latest message from @${message.author.username}.`,
-      user_id: userId,
-      guild_id: guildId,
-    },
-  });
+  // Log AI interaction (async to not block response)
+  if (message.guild) {
+    sendModLog(client, message.guild, {
+      action: "AI Response Generated",
+      target: message.author,
+      additional: {
+        userMessage: message.content.substring(0, 200),
+        userId,
+        guildId,
+      },
+    }).catch((error) => console.error("Error sending mod log:", error));
+  }
 
   const tools = {
     create_memory: tool({
@@ -462,26 +511,43 @@ export async function generateAIResponse(message: Message): Promise<string> {
     }),
   };
 
-  const { text } = await generateText({
-    model: openrouter("openai/gpt-4.1"),
-    messages: promptMessages,
-    maxTokens: 1000,
-    tools,
-    toolChoice: "auto",
-    maxSteps: 10, // enable multi-step calls
-    experimental_continueSteps: true,
-  });
+  try {
+    const { text } = await generateText({
+      model: openrouter("openai/gpt-4.1-mini"),
+      messages: promptMessages,
+      maxTokens: 800, // Slightly reduced for better performance
+      tools,
+      toolChoice: "auto",
+      maxSteps: 8, // Reduced for efficiency
+      experimental_continueSteps: true,
+      temperature: 0.7, // Add some personality
+    });
 
-  let processedResponse = text;
-  for (const [id, username] of pingableUsers) {
-    // Escape regex special characters in username
-    const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Allow word boundary, underscore, or period after username
-    processedResponse = processedResponse.replace(
-      new RegExp(`@${escapedUsername}(?=\\b|_|\\.)`, "g"),
-      `<@${id}>`,
-    );
+    if (!text || text.trim().length === 0) {
+      throw new Error("Empty response from AI model");
+    }
+
+    // Process mentions more efficiently
+    let processedResponse = text;
+    for (const [id, username] of pingableUsers) {
+      // Escape regex special characters in username
+      const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // More precise mention replacement
+      processedResponse = processedResponse.replace(
+        new RegExp(`@${escapedUsername}(?=\\s|$|[^a-zA-Z0-9_])`, "g"),
+        `<@${id}>`,
+      );
+    }
+
+    return processedResponse.trim();
+  } catch (error) {
+    console.error("Error generating AI response:", error);
+
+    // Return fallback response based on context
+    if (message.mentions.has(client.user?.id!)) {
+      return "I heard you mention me, but I'm having trouble responding right now. Try again in a moment!";
+    } else {
+      throw error; // Re-throw for higher level error handling
+    }
   }
-
-  return processedResponse;
 }
