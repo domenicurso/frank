@@ -17,14 +17,14 @@ const processingMessages = new Set<string>();
 // Configuration
 const CONFIG = {
   // Cooldown periods (in milliseconds)
-  USER_COOLDOWN: 5 * 1000, // Seconds between responses to same user
-  CHANNEL_COOLDOWN: 2 * 1000, // Seconds between any responses in channel
+  USER_COOLDOWN: 10 * 1000, // Seconds between responses to same user
+  CHANNEL_COOLDOWN: 4 * 1000, // Seconds between any responses in channel
 
   // Response probability weights
-  MENTION_WEIGHT: 1.0, // Always respond to mentions
-  REPLY_WEIGHT: 1.0, // Always respond to replies
-  CONVERSATION_WEIGHT: 0.8, // Chance in active conversation
-  RANDOM_WEIGHT: 0.05, // Random chance
+  MENTION_WEIGHT: 100 / 100, // Always respond to mentions
+  REPLY_WEIGHT: 100 / 100, // Always respond to replies
+  CONVERSATION_WEIGHT: 5 / 100, // Chance in active conversation
+  RANDOM_WEIGHT: 1 / 100, // Random chance
 
   // Activity thresholds
   ACTIVE_CONVERSATION_THRESHOLD: 3, // Messages in timeframe
@@ -32,7 +32,7 @@ const CONFIG = {
 
   // Message chunking
   MAX_CHUNK_LENGTH: 1800, // Leave room for Discord's 2000 limit
-  TYPING_SPEED: 80, // Characters per second
+  TYPING_SPEED: 40, // Characters per second
   MIN_TYPING_TIME: 1 * 1000, // Minimum typing time
   MAX_TYPING_TIME: 6 * 1000, // Maximum typing time
 };
@@ -77,14 +77,8 @@ function updateChannelActivity(message: Message) {
   if (activity && now - activity.lastMessage < CONFIG.ACTIVITY_WINDOW) {
     activity.messageCount++;
     activity.lastMessage = now;
-    console.log(
-      `[AI Controller] Updated activity for channel ${channelId}: messageCount=${activity.messageCount} (incremented)`,
-    );
   } else {
     channelActivity.set(channelId, { lastMessage: now, messageCount: 1 });
-    console.log(
-      `[AI Controller] Reset activity for channel ${channelId}: messageCount=1 (new/expired)`,
-    );
   }
 }
 
@@ -210,7 +204,11 @@ function calculateTypingTime(text: string): number {
 /**
  * Sends response with improved UX (chunking, typing indicators, realistic delays)
  */
-async function sendResponse(message: Message, response: string) {
+async function sendResponse(
+  message: Message,
+  response: string,
+  startTime: number,
+) {
   const channel = message.channel as TextChannel;
   const chunks = chunkResponse(response);
 
@@ -219,10 +217,15 @@ async function sendResponse(message: Message, response: string) {
     return;
   }
 
+  const diffFromStart = Date.now() - startTime;
+
   // Send first chunk as a reply
   await channel.sendTyping();
   await new Promise((resolve) =>
-    setTimeout(resolve, calculateTypingTime(chunks[0]!)),
+    setTimeout(
+      resolve,
+      Math.max(calculateTypingTime(chunks[0]!) - diffFromStart, 0),
+    ),
   );
   await message.reply(chunks[0]!);
 
@@ -241,10 +244,6 @@ export async function execute(message: Message) {
     // Ignore messages sent by bots
     if (message.author.bot) return;
 
-    // Ignore messages from blacklisted users
-    const blacklisted_ids: string[] = [];
-    if (blacklisted_ids.includes(message.author.id)) return;
-
     // Only process text-based channels
     if (!message.channel.isTextBased()) return;
 
@@ -252,8 +251,8 @@ export async function execute(message: Message) {
     const messageKey = `${message.id}_${message.author.id}`;
     if (processingMessages.has(messageKey)) return;
 
-    // Check if bot should respond
-    const isMentioned = message.mentions.has(client.user?.id!);
+    // Check if it's a specific mention of the bot (not role mentions)
+    const isMentioned = message.mentions.users.has(client.user?.id!);
     const isReplyToBot = await (async () => {
       if (!message.reference?.messageId) return false;
       try {
@@ -286,6 +285,12 @@ export async function execute(message: Message) {
     processingMessages.add(messageKey);
 
     try {
+      const channel = message.channel as TextChannel;
+      await channel.sendTyping();
+
+      // track start time
+      const startTime = Date.now();
+
       // Generate AI response
       const response = await generateAIResponse(message);
 
@@ -297,7 +302,7 @@ export async function execute(message: Message) {
       }
 
       // Send response with improved UX
-      await sendResponse(message, response);
+      await sendResponse(message, response, startTime);
 
       // Set cooldowns
       await setCooldown(message);

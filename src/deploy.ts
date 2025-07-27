@@ -60,8 +60,28 @@ async function loadCommandFile(
 ): Promise<void> {
   process.stdout.write(chalk.cyan(`${indent}${fileName.padEnd(20)}  `));
 
+  // Store original console methods to silence output from imported files
+  const originalConsole = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+    info: console.info,
+    debug: console.debug,
+  };
+
+  // Replace console methods with no-op functions
+  console.log = () => {};
+  console.warn = () => {};
+  console.error = () => {};
+  console.info = () => {};
+  console.debug = () => {};
+
   try {
     const command = await import(filePath);
+
+    // Restore console methods
+    Object.assign(console, originalConsole);
+
     if ("definition" in command && "execute" in command) {
       commands.push(command.definition.toJSON());
       console.log(chalk.green(`Loaded ${command.definition.name || fileName}`));
@@ -73,6 +93,8 @@ async function loadCommandFile(
       );
     }
   } catch (error) {
+    // Restore console methods in case of error
+    Object.assign(console, originalConsole);
     console.log(chalk.red(`${indent}Failed to load ${fileName}: ${error}`));
   }
 }
@@ -118,9 +140,7 @@ console.log(chalk.gray(commandsDir));
 
 await loadCommandsFromDirectory(commandsDir);
 
-console.log(
-  chalk.cyan(`\n🚀 Preparing to deploy ${commands.length} commands...`),
-);
+console.log(chalk.blue(`\nPreparing to deploy ${commands.length} commands...`));
 
 // Construct and prepare an instance of the REST module
 const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
@@ -129,9 +149,7 @@ const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 (async () => {
   try {
     console.log(
-      chalk.yellow(
-        `🔄 Refreshing ${commands.length} application (/) commands...`,
-      ),
+      chalk.yellow(`Refreshing ${commands.length} application commands...`),
     );
 
     const data = await rest.put(
@@ -141,14 +159,19 @@ const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
     console.log(
       chalk.green(
-        `✅ Successfully deployed ${(data as any[]).length} application (/) commands!`,
+        `Successfully deployed ${(data as any[]).length} application commands!`,
       ),
     );
 
-    console.log(chalk.cyan("\n📋 Deployed commands:"));
+    console.log(chalk.cyan("\nDeployed commands"));
     commands.forEach((cmd, index) => {
       console.log(
-        chalk.gray(`   ${index + 1}. /${cmd.name} - ${cmd.description}`),
+        chalk.gray(
+          `  ${(index + 1).toString().padStart(commands.length.toString().length)}. `,
+        ) +
+          chalk.yellow.bold(`/${cmd.name.padEnd(15)}`) +
+          chalk.gray(" - ") +
+          chalk.white(cmd.description),
       );
     });
 
