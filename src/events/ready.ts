@@ -59,19 +59,29 @@ export const name = "Ready";
 export const type = Events.ClientReady;
 export const once = true;
 
-export async function execute(client: Client) {
-  // set status
+function setRandomActivity(client: Client) {
   client.user?.setPresence({
     activities: [
       {
         type: ActivityType.Playing,
-        name:
-          activityNames[Math.floor(Math.random() * activityNames.length)] ||
-          "something idk",
+        name: activityNames[Math.floor(Math.random() * activityNames.length)]!,
       },
     ],
     status: "online",
   });
+}
+
+export async function execute(client: Client) {
+  // set initial status
+  setRandomActivity(client);
+
+  // change activity every 2 minutes
+  setInterval(
+    () => {
+      setRandomActivity(client);
+    },
+    2 * 60 * 1000,
+  );
 
   console.log(
     chalk.yellow("Ready!"),
