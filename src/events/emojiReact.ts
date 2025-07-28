@@ -47,7 +47,7 @@ export async function execute(message: Message) {
       const promptMessages: CoreMessage[] = [
         {
           role: "system",
-          content: "Based on the user's input, response with a SINGLE emoji",
+          content: "Based on the user's input, respond with a SINGLE emoji.",
         },
         { role: "user", content: message.content },
       ];
@@ -55,7 +55,7 @@ export async function execute(message: Message) {
       const { text } = await generateText({
         model: openrouter("google/gemini-2.5-flash"),
         messages: promptMessages,
-        maxTokens: 20,
+        maxTokens: 10,
         temperature: 0.7,
       });
 

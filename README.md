@@ -1,6 +1,6 @@
-# Bot of Doom
+# Frank Botello
 
-**Bot of Doom** is a Discord bot with AI chat capabilities, moderation tools, and community management features.
+**Frank Botello** is a Discord bot with AI chat capabilities, moderation tools, and community management features.
 
 ## 🚀 Getting Started
 
@@ -26,7 +26,7 @@
    ```
 
 3. **Environment Setup**
-   
+
    Create a `.env` file in the root directory:
 
    ```env
