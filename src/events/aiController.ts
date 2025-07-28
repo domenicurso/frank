@@ -252,7 +252,11 @@ export async function execute(message: Message) {
     if (processingMessages.has(messageKey)) return;
 
     // Check if it's a specific mention of the bot (not role mentions)
-    const isMentioned = message.mentions.users.has(client.user?.id!);
+    const isMentioned =
+      message.mentions.users.has(client.user?.id!) ||
+      message.content
+        .toLowerCase()
+        .includes((client.user?.username || "").toLowerCase());
     const isReplyToBot = await (async () => {
       if (!message.reference?.messageId) return false;
       try {
