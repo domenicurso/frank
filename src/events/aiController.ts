@@ -23,12 +23,14 @@ const CONFIG = {
   // Response probability weights
   MENTION_WEIGHT: 100 / 100, // Always respond to mentions
   REPLY_WEIGHT: 100 / 100, // Always respond to replies
+  FOLLOW_UP_WEIGHT: 80 / 100, // High chance when user responds to Frank
   CONVERSATION_WEIGHT: 5 / 100, // Chance in active conversation
   RANDOM_WEIGHT: 1 / 100, // Random chance
 
   // Activity thresholds
   ACTIVE_CONVERSATION_THRESHOLD: 3, // Messages in timeframe
   ACTIVITY_WINDOW: 5 * 60 * 1000, // Timeframe for activity
+  FOLLOW_UP_WINDOW: 15 * 1000, // Time window for follow-up responses
 
   // Message chunking
   MAX_CHUNK_LENGTH: 1800, // Leave room for Discord's 2000 limit
@@ -98,15 +100,47 @@ function isBotMentioned(message: Message): boolean {
 }
 
 /**
+ * Checks if the previous message in the channel was from Frank within the follow-up window
+ */
+async function isFollowUpToFrank(message: Message): Promise<boolean> {
+  try {
+    // Fetch the last few messages from the channel
+    const messages = await message.channel.messages.fetch({
+      limit: 1,
+      before: message.id,
+    });
+
+    if (messages.size === 0) return false;
+
+    // Get the most recent message before the current one
+    const previousMessage = messages.first();
+    if (!previousMessage) return false;
+
+    // Check if it's from Frank and within the time window
+    const isFrankMessage = previousMessage.author.id === client.user?.id;
+    const timeDiff =
+      message.createdTimestamp - previousMessage.createdTimestamp;
+    const withinWindow = timeDiff <= CONFIG.FOLLOW_UP_WINDOW;
+
+    return isFrankMessage && withinWindow;
+  } catch (error) {
+    console.error("Error checking follow-up to Frank:", error);
+    return false;
+  }
+}
+
+/**
  * Calculates intelligent response probability based on context
  */
 function calculateResponseProbability(
   message: Message,
   isMentioned: boolean,
   isReplyToBot: boolean,
+  isFollowUp: boolean,
 ): number {
   if (isMentioned) return CONFIG.MENTION_WEIGHT;
   if (isReplyToBot) return CONFIG.REPLY_WEIGHT;
+  if (isFollowUp) return CONFIG.FOLLOW_UP_WEIGHT;
 
   // Check conversation activity BEFORE updating it
   const channelId = message.channel.id;
@@ -325,6 +359,9 @@ export async function execute(message: Message) {
       }
     })();
 
+    // Check if this is a follow-up to Frank's message
+    const isFollowUp = await isFollowUpToFrank(message);
+
     // Update activity tracking FIRST so current message counts
     updateChannelActivity(message);
 
@@ -333,13 +370,20 @@ export async function execute(message: Message) {
       message,
       isMentioned,
       isReplyToBot,
+      isFollowUp,
     );
     const shouldRespond = Math.random() < responseProbability;
 
     if (!shouldRespond) return;
 
-    // Check cooldowns (but allow mentions and replies to override)
-    if (!isMentioned && !isReplyToBot && (await isOnCooldown(message))) return;
+    // Check cooldowns (but allow mentions, replies, and follow-ups to override)
+    if (
+      !isMentioned &&
+      !isReplyToBot &&
+      !isFollowUp &&
+      (await isOnCooldown(message))
+    )
+      return;
 
     // Mark as processing
     processingMessages.add(messageKey);
