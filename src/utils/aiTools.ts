@@ -19,7 +19,10 @@ import { z } from "zod";
 /**
  * Creates AI tools with access to the Discord message context
  */
-export function createAITools(message: Message) {
+export function createAITools(
+  message: Message,
+  pingableUsers: [string, string, string][],
+) {
   const userId = message.author.id;
   const guildId = message.guildId || "";
 
@@ -292,6 +295,104 @@ export function createAITools(message: Message) {
         } catch (error) {
           console.error("Error scheduling message:", error);
           return "Failed to schedule message. Please try again.";
+        }
+      },
+    }),
+
+    dm_user: tool({
+      description: "Send a private direct message to a specific user",
+      parameters: z.object({
+        username: z
+          .string()
+          .describe("The Discord username to send the DM to (without @)"),
+        message: z.string().describe("The private message content to send"),
+      }),
+      execute: async ({ username, message: dmMessage }) => {
+        try {
+          // Find the user by username
+          let targetUser = null;
+          let targetUserId = null;
+
+          // First check pingableUsers context (most efficient)
+          const pingableUser = pingableUsers.find(
+            ([_id, pingableUsername, _displayName]) =>
+              pingableUsername.toLowerCase() === username.toLowerCase(),
+          );
+
+          if (pingableUser) {
+            targetUserId = pingableUser[0];
+          }
+
+          // If found in pingable users, fetch the user object
+          if (targetUserId) {
+            try {
+              targetUser = await message.client.users.fetch(targetUserId);
+            } catch (error) {
+              console.error("Error fetching user by ID:", error);
+            }
+          }
+
+          // If not found in pingable users, try guild members
+          if (!targetUser && message.guild) {
+            const guildMembers = await message.guild.members.fetch();
+            const foundMember = guildMembers.find(
+              (member) =>
+                member.user.username.toLowerCase() === username.toLowerCase(),
+            );
+            if (foundMember) {
+              targetUser = foundMember.user;
+            }
+          }
+
+          // If still not found, try recent message cache
+          if (!targetUser) {
+            const recentMessages = await message.channel.messages.fetch({
+              limit: 50,
+            });
+            for (const msg of recentMessages.values()) {
+              if (
+                msg.author.username.toLowerCase() === username.toLowerCase()
+              ) {
+                targetUser = msg.author;
+                break;
+              }
+            }
+          }
+
+          if (!targetUser) {
+            return `Failed to find user with username: ${username}. Make sure they're in this server or have recently sent a message.`;
+          }
+
+          // Send the DM
+          await targetUser.send(dmMessage);
+
+          // Send a subtle confirmation in the original channel
+          try {
+            const channel = message.channel as TextChannel;
+            if (channel && channel.isTextBased()) {
+              const embed = createEmbed(
+                GREEN,
+                "Private Message Sent",
+                `Sent a private message to ${targetUser.username}`,
+              );
+              await channel.send({ embeds: [embed] });
+            }
+          } catch (embedError) {
+            console.error("Error sending DM confirmation embed:", embedError);
+          }
+
+          return `Successfully sent DM to ${targetUser.username}`;
+        } catch (error) {
+          console.error("Error sending DM:", error);
+
+          // Handle common DM errors
+          if (error instanceof Error) {
+            if (error.message.includes("Cannot send messages to this user")) {
+              return `Cannot send DM to this user - they may have DMs disabled or have blocked me.`;
+            }
+          }
+
+          return "Failed to send DM. The user may have DMs disabled.";
         }
       },
     }),

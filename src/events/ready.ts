@@ -43,7 +43,7 @@ const activityNames = [
   "pictionary",
   "tic tac toe",
   "checkers",
-  "chess",
+  "3d chess",
   "uno",
   "poker",
   "blackjack",

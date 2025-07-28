@@ -1,8 +1,8 @@
 import { client } from "@/client";
 import { generateAIResponse } from "@/utils/aiResponse";
 import { CooldownManager } from "@/utils/cooldown";
-import type { Message, TextChannel } from "discord.js";
-import { Events } from "discord.js";
+import type { DMChannel, Message, TextChannel } from "discord.js";
+import { ChannelType, Events } from "discord.js";
 
 export const name = "AIController";
 export const type = Events.MessageCreate;
@@ -18,19 +18,20 @@ const processingMessages = new Set<string>();
 const CONFIG = {
   // Cooldown periods (in milliseconds)
   USER_COOLDOWN: 10 * 1000, // Seconds between responses to same user
-  CHANNEL_COOLDOWN: 4 * 1000, // Seconds between any responses in channel
+  CHANNEL_COOLDOWN: 6 * 1000, // Seconds between any responses in channel
 
   // Response probability weights
   MENTION_WEIGHT: 100 / 100, // Always respond to mentions
   REPLY_WEIGHT: 100 / 100, // Always respond to replies
-  FOLLOW_UP_WEIGHT: 50 / 100, // User responds to Frank indirectly
+  DM_WEIGHT: 100 / 100, // High response rate for DMs
+  FOLLOW_UP_WEIGHT: 60 / 100, // User responds to Frank indirectly
   ACTIVE_WEIGHT: 5 / 100, // Chance in active conversation
   RANDOM_WEIGHT: 1 / 100, // Random chance
 
   // Activity thresholds
-  ACTIVE_CONVERSATION_THRESHOLD: 3, // Messages in timeframe
-  ACTIVE_WINDOW: 5 * 60 * 1000, // Timeframe for activity
-  FOLLOW_UP_WINDOW: 10 * 1000, // Time window for follow-up responses
+  ACTIVE_CONVERSATION_THRESHOLD: 5, // Messages in timeframe
+  ACTIVE_WINDOW: 3 * 60 * 1000, // Timeframe for activity
+  FOLLOW_UP_WINDOW: 15 * 1000, // Time window for follow-up responses
 
   // Message chunking
   MAX_CHUNK_LENGTH: 1800, // Leave room for Discord's 2000 limit
@@ -141,6 +142,11 @@ function calculateResponseProbability(
   if (isMentioned) return CONFIG.MENTION_WEIGHT;
   if (isReplyToBot) return CONFIG.REPLY_WEIGHT;
   if (isFollowUp) return CONFIG.FOLLOW_UP_WEIGHT;
+
+  // High response rate for DMs since user is directly messaging Frank
+  if (message.channel.type === ChannelType.DM) {
+    return CONFIG.DM_WEIGHT;
+  }
 
   // Check conversation activity BEFORE updating it
   const channelId = message.channel.id;
@@ -303,7 +309,7 @@ async function sendResponse(
   response: string,
   startTime: number,
 ) {
-  const channel = message.channel as TextChannel;
+  const channel = message.channel as TextChannel | DMChannel;
   const chunks = chunkResponse(response);
 
   if (chunks.length === 0) {
@@ -323,13 +329,29 @@ async function sendResponse(
   );
   await message.reply(chunks[0]!);
 
-  // Send remaining chunks as follow-up messages
+  // Send remaining chunks as follow-up messages or replies if interrupted
   for (let i = 1; i < chunks.length; i++) {
     await channel.sendTyping();
     await new Promise((resolve) =>
       setTimeout(resolve, calculateTypingTime(chunks[i]!)),
     );
-    await channel.send(chunks[i]!);
+
+    // Check if the most recent message is from Frank
+    try {
+      const recentMessages = await channel.messages.fetch({ limit: 1 });
+      const lastMessage = recentMessages.first();
+
+      // If the last message isn't from Frank, someone interrupted - send as reply to maintain thread
+      if (lastMessage && lastMessage.author.id !== client.user?.id) {
+        await message.reply(chunks[i]!);
+      } else {
+        await channel.send(chunks[i]!);
+      }
+    } catch (error) {
+      // Fallback to regular send if fetching fails
+      console.error("Error checking recent messages:", error);
+      await channel.send(chunks[i]!);
+    }
   }
 }
 
@@ -393,7 +415,7 @@ export async function execute(message: Message) {
     processingMessages.add(messageKey);
 
     try {
-      const channel = message.channel as TextChannel;
+      const channel = message.channel as TextChannel | DMChannel;
       await channel.sendTyping();
 
       // track start time

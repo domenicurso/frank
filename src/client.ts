@@ -1,4 +1,4 @@
-import { Client, Collection, GatewayIntentBits } from "discord.js";
+import { Client, Collection, GatewayIntentBits, Partials } from "discord.js";
 
 declare module "discord.js" {
   interface Client {
@@ -12,6 +12,11 @@ export const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.DirectMessages,
+  ],
+  partials: [
+    Partials.Channel, // Required for DM channels
+    Partials.Message, // Required for DM messages
   ],
 });
 

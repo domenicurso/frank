@@ -1,4 +1,5 @@
 import { getCorePrompt } from "@/prompts/core";
+import { getDMPrompt } from "@/prompts/dm";
 import { getExamplesPrompt } from "@/prompts/examples";
 import { getMemoryPrompt } from "@/prompts/memory";
 import { getPersonalityPrompt } from "@/prompts/personality";
@@ -17,6 +18,7 @@ export function buildSystemPrompt(
     getExamplesPrompt(),
     getSchedulingPrompt(),
     getMemoryPrompt(memoryContext),
+    getDMPrompt(),
   ]
     .filter(Boolean)
     .join("\n\n")

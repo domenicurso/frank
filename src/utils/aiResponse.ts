@@ -3,11 +3,9 @@ import { getGuildMemories, Memory } from "@/database";
 import { getRecentlyActiveUsers } from "@/database/userStats";
 import { buildSystemPrompt } from "@/prompts";
 import { createAITools } from "@/utils/aiTools";
-import { sendModLog } from "@/utils/moderation";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type CoreMessage } from "ai";
-import type { Message } from "discord.js";
-import type { Embed } from "node_modules/discord.js/typings";
+import type { Embed, Message } from "discord.js";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
@@ -236,29 +234,17 @@ export async function generateAIResponse(message: Message): Promise<string> {
     },
   ];
 
-  // Log AI interaction (async to not block response)
-  if (message.guild) {
-    sendModLog(client, message.guild, {
-      action: "AI Response Generated",
-      target: message.author,
-      additional: {
-        userMessage: message.content.substring(0, 200),
-      },
-    }).catch((error) => console.error("Error sending mod log:", error));
-  }
-
   // Create AI tools with message context
-  const tools = createAITools(message);
+  const tools = createAITools(message, pingableUsers);
 
   try {
     const { text } = await generateText({
       model: openrouter("google/gemini-2.5-flash"),
       messages: promptMessages,
-      maxTokens: 800,
+      maxTokens: 400,
       tools,
       toolChoice: "auto",
       maxSteps: 8,
-      experimental_continueSteps: true,
       temperature: 0.7,
     });
 
