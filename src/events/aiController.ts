@@ -38,6 +38,66 @@ const CONFIG = {
 };
 
 /**
+ * Checks if the bot is mentioned in various ways (pings, names, etc.)
+ */
+function isBotMentioned(message: Message): boolean {
+  const botUser = client.user;
+  if (!botUser) return false;
+
+  const content = message.content.toLowerCase();
+
+  // Check for direct user mentions
+  if (message.mentions.users.has(botUser.id)) {
+    return true;
+  }
+
+  // Get bot names and variations
+  const username = botUser.username.toLowerCase();
+  const displayName = botUser.displayName?.toLowerCase() || "";
+  const globalName = botUser.globalName?.toLowerCase() || "";
+
+  // Split names into parts for individual checking
+  const usernameParts = username
+    .split(/[\s\-_\.]+/)
+    .filter((part) => part.length > 2);
+  const displayNameParts = displayName
+    .split(/[\s\-_\.]+/)
+    .filter((part) => part.length > 2);
+  const globalNameParts = globalName
+    .split(/[\s\-_\.]+/)
+    .filter((part) => part.length > 2);
+
+  // Combine all name variations
+  const namesToCheck = [
+    username,
+    displayName,
+    globalName,
+    ...usernameParts,
+    ...displayNameParts,
+    ...globalNameParts,
+  ].filter((name) => name && name.length > 2); // Only check names longer than 2 chars
+
+  // Check each name variation
+  for (const name of namesToCheck) {
+    // Direct match
+    if (content.includes(name)) {
+      return true;
+    }
+
+    // Check with word boundaries to avoid false positives
+    const wordBoundaryRegex = new RegExp(
+      `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+      "i",
+    );
+    if (wordBoundaryRegex.test(content)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Calculates intelligent response probability based on context
  */
 function calculateResponseProbability(
@@ -251,12 +311,8 @@ export async function execute(message: Message) {
     const messageKey = `${message.id}_${message.author.id}`;
     if (processingMessages.has(messageKey)) return;
 
-    // Check if it's a specific mention of the bot (not role mentions)
-    const isMentioned =
-      message.mentions.users.has(client.user?.id!) ||
-      message.content
-        .toLowerCase()
-        .includes((client.user?.username || "").toLowerCase());
+    // Check if the bot is mentioned in various ways
+    const isMentioned = isBotMentioned(message);
     const isReplyToBot = await (async () => {
       if (!message.reference?.messageId) return false;
       try {
