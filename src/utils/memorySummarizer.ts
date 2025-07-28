@@ -22,11 +22,11 @@ interface MemoryChunk {
  */
 async function getMemoriesForSummarization(
   guildId: string,
-  daysOld: number = 7,
+  hoursOld: number = 8,
 ): Promise<Memory[]> {
   try {
     const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+    cutoffDate.setHours(cutoffDate.getHours() - hoursOld);
 
     const oldMemories = await Memory.findAll({
       where: {
@@ -263,8 +263,8 @@ export async function summarizeGuildMemories(guildId: string): Promise<void> {
       ),
     );
 
-    // Get memories that need summarization (older than 7 days)
-    const oldMemories = await getMemoriesForSummarization(guildId, 1);
+    // Get memories that need summarization (older than 8 hours)
+    const oldMemories = await getMemoriesForSummarization(guildId, 8);
 
     if (oldMemories.length < 2) {
       console.log(

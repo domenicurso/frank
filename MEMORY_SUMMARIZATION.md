@@ -22,7 +22,7 @@ The memory summarization feature automatically processes old memories (7+ days o
 
 ### Memory Processing
 
-1. **Selection**: Identifies memories older than 7 days that aren't already summaries
+1. **Selection**: Identifies memories older than 8 hours that aren't already summaries
 2. **Chunking**: Groups memories by user and splits large groups into manageable chunks (8-10 memories each)
 3. **Summarization**: Uses Google Gemini 2.5 Flash to create comprehensive summaries
 4. **Replacement**: Creates new summary memories and deletes original memories
@@ -42,12 +42,14 @@ The memory summarization feature automatically processes old memories (7+ days o
 Manual memory summarization command (Admin only).
 
 **Options:**
+
 - `scope`:
   - `Current Guild Only` - Process memories for the current server
   - `All Guilds` - Process memories for all servers
   - `View Statistics` - Display memory statistics and analytics
 
 **Usage Examples:**
+
 ```
 /summarize-memories scope:Current Guild Only
 /summarize-memories scope:All Guilds
@@ -57,11 +59,13 @@ Manual memory summarization command (Admin only).
 ## Memory Types
 
 ### Regular Memories
+
 - Individual pieces of information about users
 - Created through normal bot interactions
-- Subject to summarization after 7 days
+- Subject to summarization after 8 hours
 
 ### Summary Memories
+
 - Consolidated memories created by the AI
 - Key format: `summary_{username}_{timerange}`
 - Contains comprehensive information from multiple original memories
@@ -70,10 +74,12 @@ Manual memory summarization command (Admin only).
 ## Configuration
 
 ### Environment Variables
+
 - `OPENROUTER_API_KEY` - Required for AI summarization
 
 ### Adjustable Parameters (in code)
-- **Age Threshold**: Currently 7 days (`daysOld` parameter)
+
+- **Age Threshold**: Currently 8 hours (`hoursOld` parameter)
 - **Chunk Size**: 8-10 memories per chunk
 - **Minimum Chunk**: Requires 2+ memories to create a summary
 - **Schedule Interval**: 3 hours between runs
@@ -86,13 +92,14 @@ The system provides detailed statistics through the command interface:
 - **Total Memories**: Overall count of all memories
 - **Regular Memories**: Non-summary memories
 - **Summary Memories**: AI-generated consolidated memories
-- **Old Memories**: Memories eligible for summarization (7+ days)
+- **Old Memories**: Memories eligible for summarization (8+ hours)
 - **Average Content Length**: Character count statistics
 - **Guild Breakdown**: Memory distribution across servers
 
 ## Example Summarization
 
 ### Before (Multiple Memories)
+
 ```
 Key: favorite_food
 Content: User loves pizza, especially pepperoni with extra cheese.
@@ -105,6 +112,7 @@ Content: Works remote as a software engineer, 9 AM - 5 PM EST.
 ```
 
 ### After (Single Summary)
+
 ```
 Key: summary_testuser_jan_15_22
 Content: This user is a remote software engineer (9 AM - 5 PM EST) who enjoys pizza (especially pepperoni with extra cheese) and plays FPS games like Valorant and CS2. They're ranked Diamond in Valorant and aiming for Immortal rank.
@@ -153,7 +161,7 @@ This creates sample memories, runs summarization, and displays before/after resu
 ### Common Issues
 
 1. **No memories being summarized**
-   - Check if memories are older than 7 days
+   - Check if memories are older than 8 hours
    - Verify at least 2 memories exist for chunking
    - Ensure memories aren't already summaries
 
@@ -170,6 +178,7 @@ This creates sample memories, runs summarization, and displays before/after resu
 ### Manual Intervention
 
 If needed, you can:
+
 - Run summarization manually using the slash command
 - Check statistics to monitor system health
 - Review console logs for detailed operation information
@@ -178,6 +187,7 @@ If needed, you can:
 ## Future Enhancements
 
 Potential improvements:
+
 - Configurable age thresholds per guild
 - Different AI models for different content types
 - User-specific summarization preferences

@@ -7,13 +7,15 @@ Successfully implemented an automated memory summarization system for Frank, a D
 ## What Was Built
 
 ### Core Features
-- **Automatic Scheduling**: Runs every 3 hours to process old memories (7+ days)
+
+- **Automatic Scheduling**: Runs every 3 hours to process old memories (8+ hours)
 - **AI-Powered Summarization**: Uses Google Gemini 2.5 Flash via OpenRouter to create comprehensive summaries
 - **Intelligent Chunking**: Groups related memories by user and time periods for optimal summarization
 - **Safe Replacement**: Creates summary memories and only deletes originals after successful creation
 - **Performance Monitoring**: Built-in statistics and logging for system health monitoring
 
 ### Files Created
+
 - `frank/src/utils/memorySummarizer.ts` - Core summarization logic (464 lines)
 - `frank/src/commands/summarize-memories.ts` - Admin command for manual control (142 lines)
 - `frank/src/test-memory-summarizer.ts` - Comprehensive testing suite (220 lines)
@@ -21,12 +23,14 @@ Successfully implemented an automated memory summarization system for Frank, a D
 - `frank/IMPLEMENTATION_SUMMARY.md` - This summary
 
 ### Files Modified
+
 - `frank/src/database/index.ts` - Added scheduler integration
 - `frank/package.json` - Added test scripts
 
 ## Technical Implementation
 
 ### Architecture
+
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   Scheduler     │───▶│  Memory Fetcher  │───▶│   AI Chunker    │
@@ -40,12 +44,14 @@ Successfully implemented an automated memory summarization system for Frank, a D
 ```
 
 ### Key Algorithms
-1. **Memory Selection**: Queries memories older than 7 days, excludes existing summaries
+
+1. **Memory Selection**: Queries memories older than 8 hours, excludes existing summaries
 2. **Intelligent Chunking**: Groups by user, splits large groups into 8-10 memory chunks
 3. **AI Summarization**: Uses structured prompts to preserve all key information
 4. **Safe Replacement**: Atomic operations ensure data integrity
 
 ### Integration Points
+
 - **Database Layer**: Integrated with existing Sequelize models and scheduled tasks
 - **Command System**: Admin-only slash command for manual operation and statistics
 - **Logging System**: Comprehensive chalk-colored console logging
@@ -54,11 +60,13 @@ Successfully implemented an automated memory summarization system for Frank, a D
 ## Performance Benefits
 
 ### Storage Optimization
+
 - **Before**: 8 individual memories, 112 avg characters each = 896 total characters
 - **After**: 1 comprehensive summary = 972 characters
 - **Result**: Maintains complete information while reducing memory count by 87.5%
 
 ### Processing Efficiency
+
 - Reduced memory queries for bot responses
 - Faster context building for AI interactions
 - Lower database load from fewer records
@@ -67,49 +75,58 @@ Successfully implemented an automated memory summarization system for Frank, a D
 ## Testing Results
 
 ### Automated Test Suite
-- ✅ Created 8 test memories with 8-day-old timestamps
+
+- ✅ Created 8 test memories with 9-hour-old timestamps
 - ✅ Successfully detected old memories for processing
 - ✅ Generated comprehensive AI summary preserving all information
 - ✅ Safely replaced 8 memories with 1 summary
 - ✅ Verified correct statistics and cleanup
 
 ### Example Transformation
+
 **Before (8 separate memories)**:
+
 - favorite_food: "User loves pizza, especially pepperoni..."
 - gaming_preferences: "Plays mostly FPS games like Valorant..."
 - work_schedule: "Works remote as a software engineer..."
 - [5 more individual memories]
 
 **After (1 comprehensive summary)**:
+
 - summary_testuser456_jul_20: "TestUser456 is a remote software engineer (9 AM - 5 PM EST) who enjoys pizza (especially pepperoni with extra cheese) and plays FPS games like Valorant and CS2. They're ranked Diamond in Valorant and aiming for Immortal rank. Has a golden retriever named Max (3 years old), enjoys landscape photography with Canon EOS R5, works out 4x/week focusing on strength training, listens to indie rock (Tame Impala, ODESZA, Radiohead), and is planning a Japan trip to visit Tokyo, Kyoto, and Osaka to try authentic ramen."
 
 ## Command Interface
 
 ### `/summarize-memories`
+
 - **Guild Scope**: Process current server only
 - **Global Scope**: Process all servers
 - **Statistics View**: Display memory analytics
 - **Admin Only**: Requires Administrator permissions
 
 ### Statistics Provided
+
 - Total memories count
 - Regular vs summary memory breakdown
-- Old memories eligible for summarization
+- Old memories eligible for summarization (8+ hours)
 - Average content length metrics
 - Top servers by memory count
 
 ## Configuration & Monitoring
 
 ### Environment Requirements
+
 - `OPENROUTER_API_KEY` - Required for AI summarization
 
 ### Configurable Parameters
-- Age threshold: 7 days (adjustable in code)
+
+- Age threshold: 8 hours (adjustable in code)
 - Chunk size: 8-10 memories per chunk
 - Schedule interval: 3 hours
 - Minimum chunk size: 2 memories
 
 ### Monitoring & Logging
+
 - Comprehensive console logging with color coding
 - Processing statistics and performance metrics
 - Error handling with detailed context
@@ -118,6 +135,7 @@ Successfully implemented an automated memory summarization system for Frank, a D
 ## Quality Assurance
 
 ### Code Quality
+
 - TypeScript with strict type checking
 - Comprehensive error handling
 - Async/await patterns throughout
@@ -125,6 +143,7 @@ Successfully implemented an automated memory summarization system for Frank, a D
 - Consistent code formatting
 
 ### Reliability Features
+
 - Rate limiting to prevent API abuse
 - Graceful handling of API failures
 - Database transaction safety
@@ -134,6 +153,7 @@ Successfully implemented an automated memory summarization system for Frank, a D
 ## Deployment Status
 
 ### Ready for Production
+
 - ✅ Integrated with existing codebase
 - ✅ Follows established patterns and conventions
 - ✅ Comprehensive testing completed
@@ -142,6 +162,7 @@ Successfully implemented an automated memory summarization system for Frank, a D
 - ✅ Performance optimized
 
 ### Next Steps
+
 1. Deploy to production environment
 2. Monitor initial runs through console logs
 3. Verify API key configuration

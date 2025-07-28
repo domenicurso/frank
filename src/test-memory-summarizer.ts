@@ -71,9 +71,9 @@ async function createTestMemories(): Promise<void> {
     );
 
     if (createdMemory) {
-      // Manually update the timestamp to make it old (8 days ago)
+      // Manually update the timestamp to make it old (9 hours ago)
       const oldDate = new Date();
-      oldDate.setDate(oldDate.getDate() - 8);
+      oldDate.setHours(oldDate.getHours() - 9);
 
       // Force update the timestamps using raw SQL to bypass Sequelize's auto-update
       const { sequelize } = Memory;
@@ -87,7 +87,7 @@ async function createTestMemories(): Promise<void> {
 
       console.log(
         chalk.green(
-          `✓ Created memory: ${memory.key} (set to ${oldDate.toLocaleDateString()})`,
+          `✓ Created memory: ${memory.key} (set to ${oldDate.toLocaleString()})`,
         ),
       );
     } else {
@@ -100,10 +100,10 @@ async function createTestMemories(): Promise<void> {
   const allMemories = await getGuildMemories(testGuildId);
   for (const memory of allMemories) {
     const age = Date.now() - (memory.updatedAt?.getTime() || 0);
-    const daysAgo = Math.floor(age / (24 * 60 * 60 * 1000));
+    const hoursAgo = Math.floor(age / (60 * 60 * 1000));
     console.log(
       chalk.gray(
-        `${memory.key}: updatedAt=${memory.updatedAt?.toISOString()}, ${daysAgo} days ago`,
+        `${memory.key}: updatedAt=${memory.updatedAt?.toISOString()}, ${hoursAgo} hours ago`,
       ),
     );
   }
@@ -126,7 +126,7 @@ async function displayMemories(title: string): Promise<void> {
     const prefix = isSummary ? "📄 [SUMMARY]" : "📝 [MEMORY]";
 
     const age = Date.now() - (memory.updatedAt?.getTime() || 0);
-    const daysAgo = Math.floor(age / (24 * 60 * 60 * 1000));
+    const hoursAgo = Math.floor(age / (60 * 60 * 1000));
 
     console.log(color(`${prefix} ${memory.key}`));
     console.log(
@@ -136,7 +136,7 @@ async function displayMemories(title: string): Promise<void> {
     );
     console.log(
       color(
-        `   Updated: ${memory.updatedAt?.toLocaleDateString()} (${daysAgo} days ago)`,
+        `   Updated: ${memory.updatedAt?.toLocaleString()} (${hoursAgo} hours ago)`,
       ),
     );
     console.log();
