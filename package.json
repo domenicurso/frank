@@ -5,7 +5,9 @@
   "private": true,
   "scripts": {
     "start": "bun run src/index.ts",
-    "deploy": "bun run src/deploy.ts"
+    "deploy": "bun run src/deploy.ts",
+    "test:memory": "bun run src/test-memory-summarizer.ts",
+    "dev": "bun --hot src/index.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
