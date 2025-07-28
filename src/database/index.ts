@@ -1,5 +1,4 @@
 import { processScheduledMessages } from "@/database/scheduled";
-import { runMemorySummarization } from "@/utils/memorySummarizer";
 import chalk from "chalk";
 import {
   Client,
@@ -1009,24 +1008,6 @@ setTimeout(
     setInterval(cleanupExpiredLockedChannels, 60 * 1000);
     processScheduledMessages();
     cleanupExpiredLockedChannels();
-
-    // Start memory summarization scheduler (runs every 3 hours)
-    console.log(
-      chalk.green(
-        "[Memory Summarizer] Scheduler started - will run every 3 hours",
-      ),
-    );
-    const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
-
-    // Run memory summarization after 30 seconds on startup
-    setTimeout(() => {
-      runMemorySummarization();
-    }, 30 * 1000);
-
-    // Schedule recurring runs every 3 hours
-    setInterval(() => {
-      runMemorySummarization();
-    }, THREE_HOURS_MS);
   },
   (60 - new Date().getSeconds()) * 1000,
 );
