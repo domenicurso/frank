@@ -15,8 +15,8 @@
 1. **Clone the repository**
 
    ```bash
-   gh repo clone DomBom16/bot-of-doom
-   cd bot-of-doom
+   gh repo clone DomBom16/frank
+   cd frank
    ```
 
 2. **Install dependencies**

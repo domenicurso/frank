@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "bot-of-doom",
+      "name": "frank",
       "dependencies": {
         "@openrouter/ai-sdk-provider": "0.7.3",
         "ai": "4",
