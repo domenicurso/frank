@@ -341,6 +341,10 @@ export async function execute(message: Message) {
     // Only process text-based channels
     if (!message.channel.isTextBased()) return;
 
+    const blacklisted_users = ["1398717873257713767"];
+
+    if (blacklisted_users.includes(message.author.id)) return;
+
     // Prevent duplicate processing
     const messageKey = `${message.id}_${message.author.id}`;
     if (processingMessages.has(messageKey)) return;
