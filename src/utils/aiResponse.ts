@@ -2,12 +2,12 @@ import { client } from "@/client";
 import { getGuildMemories, Memory } from "@/database";
 import { getRecentlyActiveUsers } from "@/database/userStats";
 import { buildSystemPrompt } from "@/prompts";
+import { createAITools } from "@/utils/aiTools";
+import { sendModLog } from "@/utils/moderation";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type CoreMessage } from "ai";
 import type { Message } from "discord.js";
 import type { Embed } from "node_modules/discord.js/typings";
-import { createAITools } from "./aiTools";
-import { sendModLog } from "./moderation";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
