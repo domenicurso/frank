@@ -5,6 +5,7 @@ import { buildSystemPrompt } from "@/prompts";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type CoreMessage } from "ai";
 import type { Message } from "discord.js";
+import type { Embed } from "node_modules/discord.js/typings";
 import { createAITools } from "./aiTools";
 import { sendModLog } from "./moderation";
 
@@ -77,7 +78,12 @@ export async function generateAIResponse(message: Message): Promise<string> {
     const msg = messageArray[i]!;
 
     // Skip empty messages
-    if (!msg.content.trim() && msg.attachments.size === 0) continue;
+    if (
+      !msg.content.trim() &&
+      msg.attachments.size === 0 &&
+      msg.embeds.length === 0
+    )
+      continue;
 
     // Replace mentions with usernames
     let processedContent = msg.content;
@@ -86,6 +92,31 @@ export async function generateAIResponse(message: Message): Promise<string> {
         new RegExp(`<@!?${userId}>`, "g"),
         `@${user.username}`,
       );
+    }
+
+    function embedToPlainText(embed: Embed): string {
+      let text = "";
+
+      if (embed.title) text += `## ${embed.title}`;
+      if (embed.description) text += `: ${embed.description}\n`;
+
+      if (embed.fields && embed.fields.length > 0) {
+        for (const field of embed.fields) {
+          text += `\n${field.name}:\n${field.value}\n`;
+        }
+      }
+
+      if (embed.author?.name) text += `\nAuthor: ${embed.author.name}`;
+      if (embed.footer?.text) text += `\nFooter: ${embed.footer.text}`;
+      if (embed.url) text += `\nURL: ${embed.url}`;
+      if (embed.timestamp) text += `\nTimestamp: ${embed.timestamp}`;
+
+      return text.trim();
+    }
+
+    // Handle embeds
+    if (msg.embeds.length > 0) {
+      processedContent += msg.embeds.map(embedToPlainText).join("\n\n");
     }
 
     // Handle attachments
@@ -105,10 +136,16 @@ export async function generateAIResponse(message: Message): Promise<string> {
       );
 
       if (repliedMessage) {
-        const repliedContent =
+        let repliedContent =
           repliedMessage.content.length > 60
             ? repliedMessage.content.substring(0, 60) + "..."
             : repliedMessage.content;
+        for (const [userId, user] of repliedMessage.mentions.users) {
+          repliedContent = repliedContent.replace(
+            new RegExp(`<@!?${userId}>`, "g"),
+            `@${user.username}`,
+          );
+        }
         replyContext = ` (replying to @${repliedMessage.author.username}: "${repliedContent}")`;
       } else {
         // Only fetch if not in recent messages
@@ -153,22 +190,32 @@ export async function generateAIResponse(message: Message): Promise<string> {
     const recentMemories = memories.slice(0, 15); // Reduce memory limit
 
     if (recentMemories.length > 0) {
-      const formattedMemories = recentMemories
-        .map((m: Memory) => {
-          const user = recentUsers.find(([id]) => id === m.userId);
-          const userDisplay = user
-            ? `@${user[1]}`
-            : `User(${m.userId.substring(0, 8)})`;
+      const formattedMemories = await Promise.all(
+        recentMemories.map(async (m: Memory) => {
+          const userFromRecent = recentUsers.find(([id]) => id === m.userId);
+          let userDisplay: string;
+
+          if (userFromRecent) {
+            userDisplay = userFromRecent[1];
+          } else {
+            try {
+              const fetchedUser = await client.users.fetch(m.userId);
+              userDisplay = fetchedUser.username;
+            } catch {
+              userDisplay = "Could not fetch user";
+            }
+          }
+
           // Truncate memory content for token efficiency
           const content =
             m.content.length > 400
               ? m.content.substring(0, 400) + "..."
               : m.content;
-          return `- ${userDisplay}: ${m.key} = ${content}`;
-        })
-        .join("\n");
+          return `${userDisplay} | ${m.key} | ${content}`;
+        }),
+      );
 
-      memoryContext = `Relevant memories:\n${formattedMemories}`;
+      memoryContext = `Relevant memories:\n${formattedMemories.join("\n")}`;
     }
   } catch (error) {
     console.error("Error fetching memories:", error);
@@ -177,6 +224,9 @@ export async function generateAIResponse(message: Message): Promise<string> {
   // Build optimized prompt
   const systemPrompt = buildSystemPrompt(pingableUsers, memoryContext);
   const userPrompt = `Recent conversation:\n${messageHistory}\n\nRespond to @${message.author.username}'s latest message. Keep responses conversational and engaging.`;
+
+  console.log("System Prompt:", systemPrompt);
+  console.log("User Prompt:", userPrompt);
 
   const promptMessages: CoreMessage[] = [
     {

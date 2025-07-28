@@ -13,14 +13,12 @@ export function buildSystemPrompt(
 ): string {
   return [
     getCorePrompt(pingableUsers),
-    getMemoryPrompt(memoryContext),
-    getSchedulingPrompt(),
     getPersonalityPrompt(),
     getExamplesPrompt(),
+    getSchedulingPrompt(),
+    getMemoryPrompt(memoryContext),
   ]
     .filter(Boolean)
     .join("\n\n")
     .trim();
 }
-
-console.log(buildSystemPrompt([], ""));
