@@ -243,18 +243,18 @@ export async function generateAIResponse(message: Message): Promise<string> {
   const userId = message.author.id;
   const guildId = message.guildId || "";
 
-  // Log AI interaction (async to not block response)
-  if (message.guild) {
-    sendModLog(client, message.guild, {
-      action: "AI Response Generated",
-      target: message.author,
-      additional: {
-        userMessage: message.content.substring(0, 200),
-        userId,
-        guildId,
-      },
-    }).catch((error) => console.error("Error sending mod log:", error));
-  }
+  // // Log AI interaction (async to not block response)
+  // if (message.guild) {
+  //   sendModLog(client, message.guild, {
+  //     action: "AI Response Generated",
+  //     target: message.author,
+  //     additional: {
+  //       userMessage: message.content.substring(0, 200),
+  //       userId,
+  //       guildId,
+  //     },
+  //   }).catch((error) => console.error("Error sending mod log:", error));
+  // }
 
   // Create AI tools with message context
   const tools = createAITools(message);
