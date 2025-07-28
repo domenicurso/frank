@@ -23,7 +23,7 @@ export async function execute(client: Client) {
   );
 
   console.log(
-    `Serving ${chalk.yellow.bold(client.guilds.cache.size)} guild${client.guilds.cache.size === 1 ? "" : "s"} and ${chalk.yellow.bold(client.users.cache.size)} user${client.users.cache.size === 1 ? "" : "s"}`,
+    `Serving ${chalk.yellow.bold(client.guilds.cache.size)} guild${client.guilds.cache.size === 1 ? "" : "s"}`,
     "\n",
   );
 }

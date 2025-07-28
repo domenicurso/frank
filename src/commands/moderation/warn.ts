@@ -216,14 +216,44 @@ async function handleAddWarning(interaction: ChatInputCommandInteraction) {
     });
 
     // Send ephemeral success response
+    const successEmbed = createEmbed(
+      GREEN,
+      "⚠️ Warning Added",
+      `${targetUser.tag} has received a warning.`,
+    );
+
+    successEmbed.addFields(
+      {
+        name: "Target User",
+        value: `${targetUser.toString()}\n**ID:** ${targetUser.id}`,
+        inline: true,
+      },
+      {
+        name: "Warning ID",
+        value: `#${warning.id}`,
+        inline: true,
+      },
+      {
+        name: "Warned by",
+        value: interaction.user.toString(),
+        inline: true,
+      },
+      {
+        name: "Total Warnings",
+        value: userWarningsCount.toString(),
+        inline: true,
+      },
+      {
+        name: "Reason",
+        value: reason,
+        inline: false,
+      },
+    );
+
+    successEmbed.setThumbnail(targetUser.displayAvatarURL());
+
     await interaction.reply({
-      embeds: [
-        createEmbed(
-          GREEN,
-          "Warning Added",
-          `**User:** ${targetUser.tag} (${targetUser.id})\n**Warning ID:** #${warning.id}\n**Reason:** ${reason}\n**Total Warnings:** ${userWarningsCount}\n**Warned by:** ${interaction.user.tag}`,
-        ),
-      ],
+      embeds: [successEmbed],
       flags: MessageFlags.Ephemeral,
     });
 
@@ -327,10 +357,30 @@ async function handleListWarnings(interaction: ChatInputCommandInteraction) {
     description += `\n\n*Showing 10 most recent warnings*`;
   }
 
+  const listEmbed = createEmbed(
+    YELLOW,
+    `⚠️ Warnings for ${targetUser.tag}`,
+    `This user has **${totalWarnings}** warning${totalWarnings !== 1 ? "s" : ""} in this server.`,
+  );
+
+  listEmbed.addFields({
+    name: "Warning History",
+    value: warningList,
+    inline: false,
+  });
+
+  if (totalWarnings > 10) {
+    listEmbed.addFields({
+      name: "Note",
+      value: "*Showing 10 most recent warnings*",
+      inline: false,
+    });
+  }
+
+  listEmbed.setThumbnail(targetUser.displayAvatarURL());
+
   await interaction.reply({
-    embeds: [
-      createEmbed(YELLOW, `Warnings for ${targetUser.tag}`, description),
-    ],
+    embeds: [listEmbed],
     flags: MessageFlags.Ephemeral,
   });
 }
@@ -389,14 +439,39 @@ async function handleRemoveWarning(interaction: ChatInputCommandInteraction) {
   // Remove the warning
   await warning.destroy();
 
+  const removeEmbed = createEmbed(
+    GREEN,
+    "⚠️ Warning Removed",
+    `Warning #${warningId} has been successfully removed.`,
+  );
+
+  removeEmbed.addFields(
+    {
+      name: "Target User",
+      value: targetUser.toString(),
+      inline: true,
+    },
+    {
+      name: "Warning ID",
+      value: `#${warningId}`,
+      inline: true,
+    },
+    {
+      name: "Removed by",
+      value: interaction.user.toString(),
+      inline: true,
+    },
+    {
+      name: "Original Reason",
+      value: warning.reason,
+      inline: false,
+    },
+  );
+
+  removeEmbed.setThumbnail(targetUser.displayAvatarURL());
+
   await interaction.reply({
-    embeds: [
-      createEmbed(
-        GREEN,
-        "Warning Removed",
-        `**Warning ID:** #${warningId}\n**User:** ${targetUser.tag}\n**Original Reason:** ${warning.reason}\n**Removed by:** ${interaction.user.tag}`,
-      ),
-    ],
+    embeds: [removeEmbed],
     flags: MessageFlags.Ephemeral,
   });
 
@@ -475,14 +550,34 @@ async function handleClearWarnings(interaction: ChatInputCommandInteraction) {
     },
   });
 
+  const clearEmbed = createEmbed(
+    GREEN,
+    "⚠️ Warnings Cleared",
+    `All warnings have been cleared for ${targetUser.tag}.`,
+  );
+
+  clearEmbed.addFields(
+    {
+      name: "Target User",
+      value: targetUser.toString(),
+      inline: true,
+    },
+    {
+      name: "Warnings Cleared",
+      value: warningsCount.toString(),
+      inline: true,
+    },
+    {
+      name: "Cleared by",
+      value: interaction.user.toString(),
+      inline: true,
+    },
+  );
+
+  clearEmbed.setThumbnail(targetUser.displayAvatarURL());
+
   await interaction.reply({
-    embeds: [
-      createEmbed(
-        GREEN,
-        "Warnings Cleared",
-        `**User:** ${targetUser.tag}\n**Warnings Cleared:** ${warningsCount}\n**Cleared by:** ${interaction.user.tag}`,
-      ),
-    ],
+    embeds: [clearEmbed],
     flags: MessageFlags.Ephemeral,
   });
 

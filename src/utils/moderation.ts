@@ -154,38 +154,79 @@ function createModLogEmbed(data: ModLogData): EmbedBuilder {
   const color = data.color || getActionColor(data.action);
   const target = data.target;
   const moderator = data.moderator;
+  const targetTag = target instanceof User ? target.tag : target.user.tag;
+  const targetAvatarUrl =
+    target instanceof User
+      ? target.displayAvatarURL()
+      : target.user.displayAvatarURL();
 
-  let description = `**Action:** ${data.action}\n`;
-  description += `**Target:** ${target.toString()} (${target instanceof User ? target.tag : target.user.tag})\n`;
-  description += `**Target ID:** ${target.id}\n`;
+  const embed = createEmbed(
+    color,
+    `${data.action}`,
+    `Action taken against ${target.toString()}`,
+  );
+
+  // Add target information field
+  embed.addFields({
+    name: "Target",
+    value: `${target.toString()} (${targetTag})`,
+    inline: true,
+  });
+
+  // Add moderator information field if present
   if (data.moderator) {
-    description += `**Moderator:** ${moderator!.toString()} (${moderator instanceof User ? moderator.tag : moderator!.user.tag})\n`;
+    const moderatorTag =
+      moderator instanceof User ? moderator.tag : moderator!.user.tag;
+    embed.addFields({
+      name: "Moderator",
+      value: `${moderator!.toString()} (${moderatorTag})`,
+      inline: true,
+    });
   }
 
+  // Add reason field if present
   if (data.reason) {
-    description += `**Reason:** ${data.reason}\n`;
+    embed.addFields({
+      name: "Reason",
+      value: data.reason,
+      inline: false,
+    });
   }
 
+  // Add duration field if present
   if (data.duration) {
-    description += `**Duration:** ${data.duration}\n`;
+    embed.addFields({
+      name: "Duration",
+      value: data.duration,
+      inline: true,
+    });
   }
 
+  // Add additional fields
   if (data.additional) {
     for (const [key, value] of Object.entries(data.additional)) {
       const formattedKey = key
         .replace(/([A-Z])/g, " $1")
         .replace(/^./, (str) => str.toUpperCase());
-      description += `**${formattedKey}:** ${value}\n`;
+      embed.addFields({
+        name: formattedKey,
+        value: String(value),
+        inline: false,
+      });
     }
   }
 
-  description += `**Timestamp:** <t:${Math.floor(Date.now() / 1000)}:F>`;
+  // // Add timestamp field
+  // embed.addFields({
+  //   name: "Timestamp",
+  //   value: `<t:${Math.floor(Date.now() / 1000)}:F>`,
+  //   inline: false,
+  // });
 
-  return createEmbed(
-    color,
-    `Moderation Log - ${data.action}`,
-    description,
-  ).setFooter({ text: `Case ID: ${Date.now()}` });
+  return embed
+    .setThumbnail(targetAvatarUrl)
+    .setTimestamp()
+    .setFooter({ text: `Moderation` });
 }
 
 /**
@@ -196,14 +237,24 @@ function createPublicNotificationEmbed(
 ): EmbedBuilder {
   const color = data.color || getActionColor(data.action);
 
-  let description = data.message;
+  const embed = createEmbed(color, data.action, data.message);
 
   if (data.target && data.moderator) {
-    description += `\n\n**Target:** ${data.target.toString()}\n`;
-    description += `**Moderator:** ${data.moderator.toString()}`;
+    const targetAvatarUrl =
+      data.target instanceof User
+        ? data.target.displayAvatarURL()
+        : data.target.user.displayAvatarURL();
+
+    embed.addFields({
+      name: "Details",
+      value: `**Target:** ${data.target.toString()}\n**Moderator:** ${data.moderator.toString()}`,
+      inline: false,
+    });
+
+    embed.setThumbnail(targetAvatarUrl);
   }
 
-  return createEmbed(color, data.action, description);
+  return embed.setTimestamp();
 }
 
 /**
@@ -316,20 +367,44 @@ export function createModerationDMEmbed(
   const color = getActionColor(action);
   const moderatorTag =
     moderator instanceof User ? moderator.tag : moderator.user.tag;
+  const moderatorAvatarUrl =
+    moderator instanceof User
+      ? moderator.displayAvatarURL()
+      : moderator.user.displayAvatarURL();
 
-  let description = `**Server:** ${guildName}\n`;
-  description += `**Action:** ${action}\n`;
-  description += `**Reason:** ${reason}\n`;
-  description += `**Moderator:** ${moderatorTag}`;
+  const embed = createEmbed(
+    color,
+    `${action} in ${guildName}`,
+    `You have received a moderation action in **${guildName}**.`,
+  );
+
+  embed.addFields({
+    name: "Action Details",
+    value: `**Action:** ${action}\n**Moderator:** ${moderatorTag}`,
+    inline: false,
+  });
+
+  embed.addFields({
+    name: "Reason",
+    value: reason,
+    inline: false,
+  });
 
   if (additional) {
     for (const [key, value] of Object.entries(additional)) {
       const formattedKey = key
         .replace(/([A-Z])/g, " $1")
         .replace(/^./, (str) => str.toUpperCase());
-      description += `\n**${formattedKey}:** ${value}`;
+      embed.addFields({
+        name: formattedKey,
+        value: value,
+        inline: true,
+      });
     }
   }
 
-  return createEmbed(color, `${action} - ${guildName}`, description);
+  return embed
+    .setThumbnail(moderatorAvatarUrl)
+    .setTimestamp()
+    .setFooter({ text: guildName });
 }

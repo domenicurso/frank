@@ -188,14 +188,34 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await targetMember.timeout(null, reason);
 
     // Send ephemeral success response
+    const successEmbed = createEmbed(
+      GREEN,
+      "⏰ Timeout Removed",
+      `${targetUser.tag}'s timeout has been successfully removed.`,
+    );
+
+    successEmbed.addFields(
+      {
+        name: "Target User",
+        value: `${targetUser.toString()}\n**ID:** ${targetUser.id}`,
+        inline: true,
+      },
+      {
+        name: "Removed by",
+        value: interaction.user.toString(),
+        inline: true,
+      },
+      {
+        name: "Reason",
+        value: reason,
+        inline: false,
+      },
+    );
+
+    successEmbed.setThumbnail(targetUser.displayAvatarURL());
+
     await interaction.reply({
-      embeds: [
-        createEmbed(
-          GREEN,
-          "Timeout Removed",
-          `**User:** ${targetUser.tag} (${targetUser.id})\n**Reason:** ${reason}\n**Removed by:** ${interaction.user.tag}`,
-        ),
-      ],
+      embeds: [successEmbed],
       flags: MessageFlags.Ephemeral,
     });
 

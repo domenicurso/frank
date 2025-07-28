@@ -195,14 +195,44 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
     // Send ephemeral success response
     const statusText = targetMember ? "in server" : "not in server";
+    const successEmbed = createEmbed(
+      GREEN,
+      "🔨 User Banned",
+      `${targetUser.tag} has been successfully banned from the server.`,
+    );
+
+    successEmbed.addFields(
+      {
+        name: "Target User",
+        value: `${targetUser.toString()}\n**ID:** ${targetUser.id}`,
+        inline: true,
+      },
+      {
+        name: "Status",
+        value: statusText,
+        inline: true,
+      },
+      {
+        name: "Banned by",
+        value: interaction.user.toString(),
+        inline: true,
+      },
+      {
+        name: "Message Deletion",
+        value: `${deleteMessageDays} day${deleteMessageDays !== 1 ? "s" : ""}`,
+        inline: true,
+      },
+      {
+        name: "Reason",
+        value: reason,
+        inline: false,
+      },
+    );
+
+    successEmbed.setThumbnail(targetUser.displayAvatarURL());
+
     await interaction.reply({
-      embeds: [
-        createEmbed(
-          GREEN,
-          "User Banned",
-          `**User:** ${targetUser.tag} (${targetUser.id})\n**Status:** ${statusText}\n**Reason:** ${reason}\n**Message deletion:** ${deleteMessageDays} day${deleteMessageDays !== 1 ? "s" : ""}\n**Banned by:** ${interaction.user.tag}`,
-        ),
-      ],
+      embeds: [successEmbed],
       flags: MessageFlags.Ephemeral,
     });
 
@@ -212,7 +242,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       interaction.guild,
       "bans",
       {
-        action: "Ban",
+        action: "User Banned",
         target: targetUser,
         moderator: interaction.user,
         reason: reason,

@@ -311,7 +311,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       interaction.guild,
       "message_deletes",
       {
-        action: "Messages Cleared",
+        action: `Messages Cleared in ${channel.name}`,
         target: targetUser || interaction.user,
         moderator: interaction.user,
         reason: reason,
@@ -319,7 +319,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
           channel: channel.toString(),
           messagesDeleted: deletedCount,
           ...(skippedCount > 0 && { messagesSkipped: skippedCount }),
-          ...(targetUser && { targetUser: targetUser.tag }),
+          ...(targetUser && { targetFrom: targetUser.tag }),
         },
       },
       {

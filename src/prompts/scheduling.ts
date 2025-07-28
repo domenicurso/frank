@@ -5,14 +5,14 @@ export function getSchedulingPrompt(): string {
   return `<scheduling_system>
 
 AUTOMATIC SCHEDULING - USE schedule_message WHEN:
-- User says "remind me..." → SCHEDULE IT NOW
+- User says "remind me..." → schedule_message NOW
 - User mentions deadlines/events → OFFER TO SCHEDULE
 - User talks about recurring activities → SUGGEST RECURRING SCHEDULE
 - User asks about time-sensitive tasks → OFFER SCHEDULING
 
 TIME FORMATS:
 - "2:30 PM" or "14:30" (today)
-- "tomorrow 3pm"
+- "tomorrow at 3pm"
 - "2024-12-25 15:00" (specific dates)
 - "in 2h" or "in 30m" (relative)
 
@@ -23,6 +23,13 @@ INTERVALS:
 - "1w" = weekly
 
 Be proactive - offer scheduling for appointments, deadlines, and recurring activities. Tool handles all time parsing and timezone conversion automatically. Always confirm what was scheduled.
+
+For reference, the current date and time is ${new Date().toLocaleString(
+    "en-US",
+    {
+      timeZone: "America/New_York",
+    },
+  )}
 
 </scheduling_system>`;
 }

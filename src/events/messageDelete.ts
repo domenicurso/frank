@@ -22,9 +22,8 @@ export async function execute(message: Message) {
       {
         action: "Message Deleted",
         target: message.author,
-        moderator: message.author,
         additional: {
-          messageId: message.id,
+          channel: `<#${message.channel.id}>`,
           content: message.content,
         },
       },

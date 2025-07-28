@@ -225,28 +225,69 @@ async function handleLockChannel(interaction: ChatInputCommandInteraction) {
     // Auto-unlock will be handled by database interval if duration is set
 
     // Send ephemeral success response
-    let description = `**Channel:** ${channel}\n**Reason:** ${reason}\n**Locked by:** ${interaction.user.tag}`;
+    const successEmbed = createEmbed(
+      GREEN,
+      `🔒 Channel Locked`,
+      `${channel} has been successfully locked.`,
+    );
+
+    successEmbed.addFields(
+      {
+        name: "Channel",
+        value: channel.toString(),
+        inline: true,
+      },
+      {
+        name: "Moderator",
+        value: interaction.user.toString(),
+        inline: true,
+      },
+      {
+        name: "Reason",
+        value: reason,
+        inline: false,
+      },
+    );
 
     if (unlockAt) {
       const unlockTimestamp = Math.floor(unlockAt.getTime() / 1000);
-      description += `\n**Auto-unlock:** <t:${unlockTimestamp}:F>`;
+      successEmbed.addFields({
+        name: "Auto-unlock",
+        value: `<t:${unlockTimestamp}:F>`,
+        inline: false,
+      });
     }
 
     await interaction.reply({
-      embeds: [createEmbed(GREEN, "Channel Locked", description)],
+      embeds: [successEmbed],
       flags: MessageFlags.Ephemeral,
     });
 
     // Send a public notification (only for channels that support sending messages)
     if (channel instanceof TextChannel || channel instanceof NewsChannel) {
+      const publicEmbed = createEmbed(
+        YELLOW,
+        "🔒 Channel Locked",
+        `This channel has been locked by ${interaction.user}.`,
+      );
+
+      publicEmbed.addFields({
+        name: "Reason",
+        value: reason,
+        inline: false,
+      });
+
+      if (unlockAt) {
+        const unlockTimestamp = Math.floor(unlockAt.getTime() / 1000);
+        publicEmbed.addFields({
+          name: "Auto-unlock",
+          value: `<t:${unlockTimestamp}:R>`,
+          inline: false,
+        });
+      }
+
       const publicNotification = await channel.send({
-        embeds: [
-          createEmbed(
-            YELLOW,
-            "Channel Locked",
-            `This channel has been locked by ${interaction.user.tag}.\n**Reason:** ${reason}`,
-          ),
-        ],
+        embeds: [publicEmbed],
       });
     }
 
@@ -256,12 +297,11 @@ async function handleLockChannel(interaction: ChatInputCommandInteraction) {
       interaction.guild!,
       "channel_locks",
       {
-        action: "Channel Locked",
+        action: `Channel Locked - ${channel.name}`,
         target: interaction.user, // Using moderator as target since it's a channel action
         moderator: interaction.user,
         reason: reason,
         additional: {
-          channel: channel.toString(),
           channelType: channel.type.toString(),
           ...(unlockAt && {
             autoUnlock: `<t:${Math.floor(unlockAt.getTime() / 1000)}:F>`,
@@ -271,7 +311,7 @@ async function handleLockChannel(interaction: ChatInputCommandInteraction) {
       {
         action: "🔒 Channel Locked",
         moderator: interaction.user,
-        message: `${channel} has been locked by ${interaction.user.tag}.`,
+        message: `${channel.name} has been locked.`,
       },
     );
   } catch (error) {
@@ -364,27 +404,61 @@ async function handleUnlockChannel(interaction: ChatInputCommandInteraction) {
     const lockDuration = Date.now() - lockInfo.lockedAt.getTime();
     const formattedDuration = formatDuration(lockDuration);
 
+    const successEmbed = createEmbed(
+      GREEN,
+      "🔓 Channel Unlocked",
+      `${channel} has been successfully unlocked.`,
+    );
+
+    successEmbed.addFields(
+      {
+        name: "Channel",
+        value: channel.toString(),
+        inline: true,
+      },
+      {
+        name: "Unlocked by",
+        value: interaction.user.toString(),
+        inline: true,
+      },
+      {
+        name: "Originally locked by",
+        value: `<@${lockInfo.lockedBy}>`,
+        inline: true,
+      },
+      {
+        name: "Lock duration",
+        value: formattedDuration,
+        inline: true,
+      },
+      {
+        name: "Reason",
+        value: reason,
+        inline: false,
+      },
+    );
+
     await interaction.reply({
-      embeds: [
-        createEmbed(
-          GREEN,
-          "Channel Unlocked",
-          `**Channel:** ${channel}\n**Reason:** ${reason}\n**Originally locked by:** <@${lockInfo.lockedBy}>\n**Lock duration:** ${formattedDuration}\n**Unlocked by:** ${interaction.user.tag}`,
-        ),
-      ],
+      embeds: [successEmbed],
       flags: MessageFlags.Ephemeral,
     });
 
     // Send a public notification (only for channels that support sending messages)
     if (channel instanceof TextChannel || channel instanceof NewsChannel) {
+      const publicEmbed = createEmbed(
+        GREEN,
+        "🔓 Channel Unlocked",
+        `This channel has been unlocked by ${interaction.user}.`,
+      );
+
+      publicEmbed.addFields({
+        name: "Lock Duration",
+        value: formattedDuration,
+        inline: true,
+      });
+
       const publicNotification = await channel.send({
-        embeds: [
-          createEmbed(
-            GREEN,
-            "Channel Unlocked",
-            `This channel has been unlocked by ${interaction.user.tag}.`,
-          ),
-        ],
+        embeds: [publicEmbed],
       });
 
       // Delete the notification after 10 seconds
@@ -403,12 +477,11 @@ async function handleUnlockChannel(interaction: ChatInputCommandInteraction) {
       interaction.guild!,
       "channel_locks",
       {
-        action: "Channel Unlocked",
+        action: `Channel Unlocked - ${channel.name}`,
         target: interaction.user, // Using moderator as target since it's a channel action
         moderator: interaction.user,
         reason: reason,
         additional: {
-          channel: channel.toString(),
           channelType: channel.type.toString(),
           originallyLockedBy: `<@${lockInfo.lockedBy}>`,
           lockDuration: formattedDuration,
@@ -417,7 +490,7 @@ async function handleUnlockChannel(interaction: ChatInputCommandInteraction) {
       {
         action: "🔓 Channel Unlocked",
         moderator: interaction.user,
-        message: `${channel} has been unlocked by ${interaction.user.tag}.`,
+        message: `${channel.name} has been unlocked.`,
       },
     );
   } catch (error) {

@@ -238,14 +238,44 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await targetMember.timeout(duration, reason);
 
     // Send ephemeral success response
+    const successEmbed = createEmbed(
+      GREEN,
+      "⏰ User Timed Out",
+      `${targetUser.tag} has been successfully timed out.`,
+    );
+
+    successEmbed.addFields(
+      {
+        name: "Target User",
+        value: `${targetUser.toString()}\n**ID:** ${targetUser.id}`,
+        inline: true,
+      },
+      {
+        name: "Duration",
+        value: formattedDuration,
+        inline: true,
+      },
+      {
+        name: "Timed out by",
+        value: interaction.user.toString(),
+        inline: true,
+      },
+      {
+        name: "Until",
+        value: `<t:${timeoutEndTimestamp}:F>`,
+        inline: false,
+      },
+      {
+        name: "Reason",
+        value: reason,
+        inline: false,
+      },
+    );
+
+    successEmbed.setThumbnail(targetUser.displayAvatarURL());
+
     await interaction.reply({
-      embeds: [
-        createEmbed(
-          GREEN,
-          "User Timed Out",
-          `**User:** ${targetUser.tag} (${targetUser.id})\n**Duration:** ${formattedDuration}\n**Until:** <t:${timeoutEndTimestamp}:F>\n**Reason:** ${reason}\n**Timed out by:** ${interaction.user.tag}`,
-        ),
-      ],
+      embeds: [successEmbed],
       flags: MessageFlags.Ephemeral,
     });
 
@@ -255,7 +285,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
       interaction.guild,
       "timeouts",
       {
-        action: "Timeout",
+        action: "User Timed Out",
         target: targetUser,
         moderator: interaction.user,
         reason: reason,
