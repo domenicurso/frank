@@ -23,14 +23,14 @@ const CONFIG = {
   // Response probability weights
   MENTION_WEIGHT: 100 / 100, // Always respond to mentions
   REPLY_WEIGHT: 100 / 100, // Always respond to replies
-  FOLLOW_UP_WEIGHT: 80 / 100, // High chance when user responds to Frank
-  CONVERSATION_WEIGHT: 5 / 100, // Chance in active conversation
+  FOLLOW_UP_WEIGHT: 50 / 100, // User responds to Frank indirectly
+  ACTIVE_WEIGHT: 5 / 100, // Chance in active conversation
   RANDOM_WEIGHT: 1 / 100, // Random chance
 
   // Activity thresholds
   ACTIVE_CONVERSATION_THRESHOLD: 3, // Messages in timeframe
-  ACTIVITY_WINDOW: 5 * 60 * 1000, // Timeframe for activity
-  FOLLOW_UP_WINDOW: 15 * 1000, // Time window for follow-up responses
+  ACTIVE_WINDOW: 5 * 60 * 1000, // Timeframe for activity
+  FOLLOW_UP_WINDOW: 10 * 1000, // Time window for follow-up responses
 
   // Message chunking
   MAX_CHUNK_LENGTH: 1800, // Leave room for Discord's 2000 limit
@@ -149,11 +149,11 @@ function calculateResponseProbability(
   if (activity) {
     const timeSinceLastMessage = Date.now() - activity.lastMessage;
     const isActiveConversation =
-      timeSinceLastMessage < CONFIG.ACTIVITY_WINDOW &&
+      timeSinceLastMessage < CONFIG.ACTIVE_WINDOW &&
       activity.messageCount >= CONFIG.ACTIVE_CONVERSATION_THRESHOLD;
 
     if (isActiveConversation) {
-      return CONFIG.CONVERSATION_WEIGHT;
+      return CONFIG.ACTIVE_WEIGHT;
     }
   }
 
@@ -168,7 +168,7 @@ function updateChannelActivity(message: Message) {
   const now = Date.now();
   const activity = channelActivity.get(channelId);
 
-  if (activity && now - activity.lastMessage < CONFIG.ACTIVITY_WINDOW) {
+  if (activity && now - activity.lastMessage < CONFIG.ACTIVE_WINDOW) {
     activity.messageCount++;
     activity.lastMessage = now;
   } else {
@@ -438,7 +438,7 @@ export async function execute(message: Message) {
 setInterval(
   () => {
     const now = Date.now();
-    const cutoff = now - CONFIG.ACTIVITY_WINDOW * 2; // Keep data for 2x the window
+    const cutoff = now - CONFIG.ACTIVE_WINDOW * 2; // Keep data for 2x the window
 
     // Clean up channel activity
     for (const [key, activity] of channelActivity.entries()) {
