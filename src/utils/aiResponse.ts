@@ -221,7 +221,6 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
   // Build optimized prompt
   const systemPrompt = buildSystemPrompt(pingableUsers, memoryContext);
-  console.log(systemPrompt);
   const userPrompt = `Recent conversation:\n${messageHistory}\n\nRespond to @${message.author.username}'s latest message. Keep responses conversational and engaging.`;
 
   const promptMessages: CoreMessage[] = [

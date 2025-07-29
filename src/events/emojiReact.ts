@@ -1,6 +1,4 @@
 import percent from "@/utils/percent";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { generateText, type CoreMessage } from "ai";
 import { Events, Message } from "discord.js";
 import emojiData from "unicode-emoji-json";
 
@@ -21,10 +19,6 @@ function getRandomEmojis(count: number): string[] {
   return result;
 }
 
-const openrouter = createOpenRouter({
-  apiKey: process.env.OPENROUTER_API_KEY!,
-});
-
 export async function execute(message: Message) {
   // Don't react to bot messages
   if (message.author.bot) return;
@@ -39,27 +33,6 @@ export async function execute(message: Message) {
         // Small delay to avoid hitting rate limits
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-    } catch (error) {
-      console.error("Error adding emoji reactions:", error);
-    }
-  } else if (percent(5)) {
-    try {
-      const promptMessages: CoreMessage[] = [
-        {
-          role: "system",
-          content: "Based on the user's input, respond with a SINGLE emoji.",
-        },
-        { role: "user", content: message.content },
-      ];
-
-      const { text } = await generateText({
-        model: openrouter("google/gemini-2.5-flash"),
-        messages: promptMessages,
-        maxTokens: 10,
-        temperature: 0.7,
-      });
-
-      await message.react(text);
     } catch (error) {
       console.error("Error adding emoji reactions:", error);
     }

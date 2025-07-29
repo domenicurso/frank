@@ -14,19 +14,55 @@ const channelActivity = new Map<
 >();
 const processingMessages = new Set<string>();
 
+// Message tracking for special tokens
+const sentMessages = new Map<string, Message[]>(); // channelId -> array of sent messages
+
+// Special token interfaces
+interface DeleteToken {
+  type: "delete";
+  count: number;
+}
+
+interface EditToken {
+  type: "edit";
+  messageIndex: number;
+  newContent: string;
+}
+
+interface PauseToken {
+  type: "pause";
+}
+
+interface ReactionToken {
+  type: "reaction";
+  emoji: string;
+}
+
+interface TextChunk {
+  type: "text";
+  content: string;
+}
+
+type SpecialToken = DeleteToken | EditToken | PauseToken | ReactionToken;
+type MessageItem = SpecialToken | TextChunk;
+
 // Configuration
 const CONFIG = {
   // Cooldown periods (in milliseconds)
   USER_COOLDOWN: 10 * 1000, // Seconds between responses to same user
   CHANNEL_COOLDOWN: 6 * 1000, // Seconds between any responses in channel
+  LONG_PAUSE_DURATION: 1.5 * 1000, // Duration for ::long_pause tokens
+  // Delay ranges for token execution (min, max in milliseconds)
+  DELETE_DELAY_RANGE: [0.8 * 1000, 2.2 * 1000] as const, // Delay before delete
+  EDIT_DELAY_RANGE: [1.2 * 1000, 2 * 1000] as const, // Delay before edit
 
   // Response probability weights
-  MENTION_WEIGHT: 100 / 100, // Always respond to mentions
-  REPLY_WEIGHT: 100 / 100, // Always respond to replies
-  DM_WEIGHT: 100 / 100, // High response rate for DMs
-  FOLLOW_UP_WEIGHT: 60 / 100, // User responds to Frank indirectly
-  ACTIVE_WEIGHT: 5 / 100, // Chance in active conversation
-  RANDOM_WEIGHT: 1 / 100, // Random chance
+  MENTION_WEIGHT: 100 / 100, // Response rate for mentions
+  REPLY_WEIGHT: 100 / 100, // Response rate for replies
+  DM_WEIGHT: 100 / 100, // Response rate for DMs
+  FOLLOW_UP_WEIGHT: 60 / 100, // Response rate for indirect responses
+  ACTIVE_WEIGHT: 3 / 100, // Response rate for active conversations
+  RANDOM_WEIGHT: 1 / 100, // Response rate for random responses
 
   // Activity thresholds
   ACTIVE_CONVERSATION_THRESHOLD: 5, // Messages in timeframe
@@ -35,7 +71,7 @@ const CONFIG = {
 
   // Message chunking
   MAX_CHUNK_LENGTH: 1800, // Leave room for Discord's 2000 limit
-  TYPING_SPEED: 40, // Characters per second
+  TYPING_SPEED: 60, // Characters per second
   MIN_TYPING_TIME: 1 * 1000, // Minimum typing time
   MAX_TYPING_TIME: 6 * 1000, // Maximum typing time
 };
@@ -285,6 +321,157 @@ function chunkResponse(text: string): string[] {
 }
 
 /**
+ * Parses response text for special tokens and returns tokens + cleaned text
+ */
+function parseMessageSequence(text: string): MessageItem[] {
+  const sequence: MessageItem[] = [];
+  const lines = text.split("\n");
+  let currentTextLines: string[] = [];
+
+  const flushTextLines = () => {
+    if (currentTextLines.length > 0) {
+      const content = currentTextLines.join("\n").trim();
+      if (content) {
+        sequence.push({ type: "text", content });
+      }
+      currentTextLines = [];
+    }
+  };
+
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+
+    // Check for ::delete_last_messages [n]
+    const deleteMatch = trimmedLine.match(/^::delete_last_messages\s+(\d+)$/);
+    if (deleteMatch) {
+      flushTextLines();
+      const count = parseInt(deleteMatch[1]!, 10);
+      sequence.push({ type: "delete", count });
+      continue;
+    }
+
+    // Check for ::edit_last_message [message]
+    const editMatch = trimmedLine.match(/^::edit_last_message\s+(.+)$/);
+    if (editMatch) {
+      flushTextLines();
+      const newContent = editMatch[1]!.trim();
+      sequence.push({ type: "edit", messageIndex: 1, newContent });
+      continue;
+    }
+
+    // Check for ::reaction [emoji]
+    const reactionMatch = trimmedLine.match(/^::reaction\s+(.+)$/);
+    if (reactionMatch) {
+      flushTextLines();
+      const emoji = reactionMatch[1]!.trim();
+      sequence.push({ type: "reaction", emoji });
+      continue;
+    }
+
+    // Check for ::long_pause
+    if (trimmedLine === "::long_pause") {
+      flushTextLines();
+      sequence.push({ type: "pause" });
+      continue;
+    }
+
+    // Regular text line
+    currentTextLines.push(line);
+  }
+
+  // Flush any remaining text
+  flushTextLines();
+
+  return sequence;
+}
+
+/**
+ * Executes a delete token by removing the last n messages from Frank
+ */
+async function executeDeleteToken(
+  channel: TextChannel | DMChannel,
+  token: DeleteToken,
+  channelMessages: Message[],
+) {
+  const messagesToDelete = channelMessages.slice(-token.count);
+
+  for (const msg of messagesToDelete) {
+    try {
+      await msg.delete();
+    } catch (error) {
+      console.error("Failed to delete message:", error);
+    }
+  }
+
+  // Remove deleted messages from tracking array
+  channelMessages.splice(-token.count, token.count);
+}
+
+/**
+ * Executes an edit token by modifying the nth to last message
+ */
+async function executeEditToken(
+  channel: TextChannel | DMChannel,
+  token: EditToken,
+  channelMessages: Message[],
+) {
+  // messageIndex 1 means the last message, 2 means second to last, etc.
+  const messageIndex = channelMessages.length - token.messageIndex;
+
+  if (messageIndex >= 0 && messageIndex < channelMessages.length) {
+    const messageToEdit = channelMessages[messageIndex];
+    try {
+      await messageToEdit!.edit(token.newContent);
+    } catch (error) {
+      console.error("Failed to edit message:", error);
+    }
+  } else {
+    console.log("No valid message to edit at index:", messageIndex);
+  }
+}
+
+/**
+ * Executes a pause token by waiting for the specified duration
+ */
+async function executePauseToken() {
+  await new Promise((resolve) =>
+    setTimeout(resolve, CONFIG.LONG_PAUSE_DURATION),
+  );
+}
+
+/**
+ * Executes a reaction token by finding the last message not from Frank and reacting to it
+ */
+async function executeReactionToken(
+  channel: TextChannel | DMChannel,
+  token: ReactionToken,
+) {
+  try {
+    // Fetch recent messages to find the last one not from Frank
+    const messages = await channel.messages.fetch({ limit: 20 });
+    const lastNonFrankMessage = messages.find(
+      (msg) => msg.author.id !== client.user?.id,
+    );
+
+    if (lastNonFrankMessage) {
+      await lastNonFrankMessage.react(token.emoji);
+    } else {
+      console.log("No non-Frank message found to react to");
+    }
+  } catch (error) {
+    console.error("Failed to react to message:", error);
+  }
+}
+
+/**
+ * Calculates a random delay within the specified range
+ */
+function getRandomDelay(range: readonly [number, number]): number {
+  const [min, max] = range;
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/**
  * Calculates realistic typing time based on message length
  */
 function calculateTypingTime(text: string): number {
@@ -302,7 +489,7 @@ function calculateTypingTime(text: string): number {
 }
 
 /**
- * Sends response with improved UX (chunking, typing indicators, realistic delays)
+ * Sends response with special tokens support and improved UX
  */
 async function sendResponse(
   message: Message,
@@ -310,47 +497,80 @@ async function sendResponse(
   startTime: number,
 ) {
   const channel = message.channel as TextChannel | DMChannel;
-  const chunks = chunkResponse(response);
 
-  if (chunks.length === 0) {
+  // Parse message sequence
+  const sequence = parseMessageSequence(response);
+
+  if (sequence.length === 0) {
     await message.reply("I don't have anything to say right now.");
     return;
   }
 
-  const diffFromStart = Date.now() - startTime;
+  // Initialize sent messages tracking for this channel if needed
+  if (!sentMessages.has(channel.id)) {
+    sentMessages.set(channel.id, []);
+  }
+  const channelMessages = sentMessages.get(channel.id)!;
 
-  // Send first chunk as a reply
-  await channel.sendTyping();
-  await new Promise((resolve) =>
-    setTimeout(
-      resolve,
-      Math.max(calculateTypingTime(chunks[0]!) - diffFromStart, 0),
-    ),
-  );
-  await message.reply(chunks[0]!);
+  let isFirstMessage = true;
 
-  // Send remaining chunks as follow-up messages or replies if interrupted
-  for (let i = 1; i < chunks.length; i++) {
-    await channel.sendTyping();
-    await new Promise((resolve) =>
-      setTimeout(resolve, calculateTypingTime(chunks[i]!)),
-    );
+  for (const item of sequence) {
+    if (item.type === "text") {
+      const chunks = chunkResponse(item.content);
 
-    // Check if the most recent message is from Frank
-    try {
-      const recentMessages = await channel.messages.fetch({ limit: 1 });
-      const lastMessage = recentMessages.first();
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i]!;
 
-      // If the last message isn't from Frank, someone interrupted - send as reply to maintain thread
-      if (lastMessage && lastMessage.author.id !== client.user?.id) {
-        await message.reply(chunks[i]!);
-      } else {
-        await channel.send(chunks[i]!);
+        await channel.sendTyping();
+
+        // Calculate typing delay
+        const typingTime = calculateTypingTime(chunk);
+        const delay = isFirstMessage
+          ? Math.max(typingTime - (Date.now() - startTime), 0)
+          : typingTime;
+
+        await new Promise((resolve) => setTimeout(resolve, delay));
+
+        // Send message
+        let sentMessage: Message;
+        if (isFirstMessage) {
+          sentMessage = await message.reply(chunk);
+          isFirstMessage = false;
+        } else {
+          // Check if someone interrupted
+          try {
+            const recentMessages = await channel.messages.fetch({ limit: 1 });
+            const lastMessage = recentMessages.first();
+
+            if (lastMessage && lastMessage.author.id !== client.user?.id) {
+              sentMessage = await message.reply(chunk);
+            } else {
+              sentMessage = await channel.send(chunk);
+            }
+          } catch (error) {
+            console.error("Error checking recent messages:", error);
+            sentMessage = await channel.send(chunk);
+          }
+        }
+
+        channelMessages.push(sentMessage);
       }
-    } catch (error) {
-      // Fallback to regular send if fetching fails
-      console.error("Error checking recent messages:", error);
-      await channel.send(chunks[i]!);
+    } else if (item.type === "pause") {
+      await executePauseToken();
+    } else if (item.type === "delete") {
+      // Give users time to read the content before deleting
+      const deleteDelay = getRandomDelay(CONFIG.DELETE_DELAY_RANGE);
+      await new Promise((resolve) => setTimeout(resolve, deleteDelay));
+
+      await executeDeleteToken(channel, item, channelMessages);
+    } else if (item.type === "edit") {
+      // Give users time to read the content before editing
+      const editDelay = getRandomDelay(CONFIG.EDIT_DELAY_RANGE);
+      await new Promise((resolve) => setTimeout(resolve, editDelay));
+
+      await executeEditToken(channel, item, channelMessages);
+    } else if (item.type === "reaction") {
+      await executeReactionToken(channel, item);
     }
   }
 }
@@ -363,7 +583,7 @@ export async function execute(message: Message) {
     // Only process text-based channels
     if (!message.channel.isTextBased()) return;
 
-    const blacklisted_users = ["1398717873257713767"];
+    const blacklisted_users: string[] = ["1398717873257713767"];
 
     if (blacklisted_users.includes(message.author.id)) return;
 
@@ -424,6 +644,37 @@ export async function execute(message: Message) {
       // Generate AI response
       const response = await generateAIResponse(message);
 
+      //       const response = `bet I'm on it
+      // ::long_pause
+      // this finna be good
+      // ::long_pause
+      // you better be ready for this heat
+      // ::delete_last_messages 1
+      // i mean
+      // ::edit_last_message i hope you're ready
+      // cause here it comes
+      // ::long_pause
+      // your face looks like a potato
+      // ::delete_last_messages 1
+      // lmao jk
+      // you're alright sometimes
+      // ::long_pause
+      // but seriously though
+      // you need to clean your room
+      // ::edit_last_message you should probably clean your room
+      // cause it's a mess
+      // ::long_pause
+      // i saw that pizza box from last week
+      // ::delete_last_messages 1
+      // nah i'm just messing with you
+      // ::long_pause
+      // or am i
+      // ::edit_last_message or am i not
+      // you'll never know
+      // ::long_pause
+      // so what do you think
+      // did i cook or what`;
+
       if (!response || response.trim().length === 0) {
         await message.reply(
           "I'm having trouble thinking of what to say right now.",
@@ -470,6 +721,13 @@ setInterval(
     for (const [key, activity] of channelActivity.entries()) {
       if (activity.lastMessage < cutoff) {
         channelActivity.delete(key);
+      }
+    }
+
+    // Clean up old sent messages (keep last 20 per channel for special tokens)
+    for (const [channelId, messages] of sentMessages.entries()) {
+      if (messages.length > 20) {
+        sentMessages.set(channelId, messages.slice(-20));
       }
     }
   },
