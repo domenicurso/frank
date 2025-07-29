@@ -1,5 +1,9 @@
 import { client } from "@/client";
-import { generateAIResponse } from "@/utils/aiResponse";
+import {
+  addTyposWithCorrection,
+  shouldApplyTypos,
+} from "@/utils/ai/personality";
+import { generateAIResponse } from "@/utils/ai/response";
 import { CooldownManager } from "@/utils/cooldown";
 import type { DMChannel, Message, TextChannel } from "discord.js";
 import { ChannelType, Events } from "discord.js";
@@ -513,7 +517,24 @@ async function sendResponse(
       const chunks = chunkResponse(item.content);
 
       for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i]!;
+        let chunk = chunks[i]!;
+
+        // Apply typos to individual chunks (but not if sequence has delete/edit tokens)
+        const hasEditOrDeleteTokens = sequence.some(
+          (item) => item.type === "delete" || item.type === "edit",
+        );
+
+        if (!hasEditOrDeleteTokens && chunk.trim().length > 0) {
+          const context = {
+            isExcited: /!{2,}|[A-Z]{3,}/.test(chunk),
+            isRushed: chunk.length > 100,
+            isLongMessage: chunk.length > 50,
+          };
+
+          if (shouldApplyTypos(chunk, context)) {
+            chunk = addTyposWithCorrection(chunk);
+          }
+        }
 
         await channel.sendTyping();
 

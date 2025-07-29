@@ -2,7 +2,7 @@ import { client } from "@/client";
 import { getGuildMemories, Memory } from "@/database";
 import { getRecentlyActiveUsers } from "@/database/userStats";
 import { buildSystemPrompt } from "@/prompts";
-import { createAITools } from "@/utils/aiTools";
+import { createAITools } from "@/utils/ai/tools";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type CoreMessage } from "ai";
 import type { Embed, Message } from "discord.js";
