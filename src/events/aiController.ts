@@ -13,8 +13,9 @@ const channelActivity = new Map<
   { lastMessage: number; messageCount: number }
 >();
 const processingMessages = new Set<string>();
+const processingChannels = new Set<string>(); // Track channels currently processing responses
 
-// Message tracking for special tokens
+// Message tracking for special tokens - now per response session
 const sentMessages = new Map<string, Message[]>(); // channelId -> array of sent messages
 
 // Special token interfaces
@@ -445,19 +446,11 @@ async function executePauseToken() {
 async function executeReactionToken(
   channel: TextChannel | DMChannel,
   token: ReactionToken,
+  originalMessage: Message,
 ) {
   try {
-    // Fetch recent messages to find the last one not from Frank
-    const messages = await channel.messages.fetch({ limit: 20 });
-    const lastNonFrankMessage = messages.find(
-      (msg) => msg.author.id !== client.user?.id,
-    );
-
-    if (lastNonFrankMessage) {
-      await lastNonFrankMessage.react(token.emoji);
-    } else {
-      console.log("No non-Frank message found to react to");
-    }
+    // React to the original message that Frank is replying to
+    await originalMessage.react(token.emoji);
   } catch (error) {
     console.error("Failed to react to message:", error);
   }
@@ -506,11 +499,12 @@ async function sendResponse(
     return;
   }
 
-  // Initialize sent messages tracking for this channel if needed
-  if (!sentMessages.has(channel.id)) {
-    sentMessages.set(channel.id, []);
-  }
-  const channelMessages = sentMessages.get(channel.id)!;
+  // Create a unique session ID for this response
+  const sessionId = `${channel.id}_${Date.now()}_${Math.random()}`;
+
+  // Initialize sent messages tracking for this response session
+  const sessionMessages: Message[] = [];
+  sentMessages.set(sessionId, sessionMessages);
 
   let isFirstMessage = true;
 
@@ -553,7 +547,7 @@ async function sendResponse(
           }
         }
 
-        channelMessages.push(sentMessage);
+        sessionMessages.push(sentMessage);
       }
     } else if (item.type === "pause") {
       await executePauseToken();
@@ -562,17 +556,20 @@ async function sendResponse(
       const deleteDelay = getRandomDelay(CONFIG.DELETE_DELAY_RANGE);
       await new Promise((resolve) => setTimeout(resolve, deleteDelay));
 
-      await executeDeleteToken(channel, item, channelMessages);
+      await executeDeleteToken(channel, item, sessionMessages);
     } else if (item.type === "edit") {
       // Give users time to read the content before editing
       const editDelay = getRandomDelay(CONFIG.EDIT_DELAY_RANGE);
       await new Promise((resolve) => setTimeout(resolve, editDelay));
 
-      await executeEditToken(channel, item, channelMessages);
+      await executeEditToken(channel, item, sessionMessages);
     } else if (item.type === "reaction") {
-      await executeReactionToken(channel, item);
+      await executeReactionToken(channel, item, message);
     }
   }
+
+  // Clean up session tracking
+  sentMessages.delete(sessionId);
 }
 
 export async function execute(message: Message) {
@@ -590,6 +587,10 @@ export async function execute(message: Message) {
     // Prevent duplicate processing
     const messageKey = `${message.id}_${message.author.id}`;
     if (processingMessages.has(messageKey)) return;
+
+    // Prevent overlapping responses in the same channel
+    const channel = message.channel as TextChannel | DMChannel;
+    if (processingChannels.has(channel.id)) return;
 
     // Check if the bot is mentioned in various ways
     const isMentioned = isBotMentioned(message);
@@ -633,9 +634,9 @@ export async function execute(message: Message) {
 
     // Mark as processing
     processingMessages.add(messageKey);
+    processingChannels.add(channel.id);
 
     try {
-      const channel = message.channel as TextChannel | DMChannel;
       await channel.sendTyping();
 
       // track start time
@@ -688,8 +689,9 @@ export async function execute(message: Message) {
       // Set cooldowns
       await setCooldown(message);
     } finally {
-      // Always remove from processing set
+      // Always remove from processing sets
       processingMessages.delete(messageKey);
+      processingChannels.delete(channel.id);
     }
   } catch (error) {
     console.error("Error in AI controller:", error);
@@ -697,6 +699,11 @@ export async function execute(message: Message) {
     // Clean up processing state
     const messageKey = `${message.id}_${message.author.id}`;
     processingMessages.delete(messageKey);
+
+    if (message.channel.isTextBased()) {
+      const channel = message.channel as TextChannel | DMChannel;
+      processingChannels.delete(channel.id);
+    }
 
     // Send user-friendly error message for critical failures
     if (message.channel.isTextBased()) {
