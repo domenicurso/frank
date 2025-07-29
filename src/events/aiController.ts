@@ -15,8 +15,8 @@ const channelActivity = new Map<
 const processingMessages = new Set<string>();
 const processingChannels = new Set<string>(); // Track channels currently processing responses
 
-// Message tracking for special tokens - now per response session
-const sentMessages = new Map<string, Message[]>(); // channelId -> array of sent messages
+// Message tracking for special tokens
+const sentMessages = new Map<string, Message[]>();
 
 // Special token interfaces
 interface DeleteToken {
