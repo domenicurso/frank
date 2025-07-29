@@ -62,11 +62,11 @@ const CONFIG = {
   REPLY_WEIGHT: 100 / 100, // Response rate for replies
   DM_WEIGHT: 100 / 100, // Response rate for DMs
   FOLLOW_UP_WEIGHT: 60 / 100, // Response rate for indirect responses
-  ACTIVE_WEIGHT: 3 / 100, // Response rate for active conversations
+  ACTIVE_WEIGHT: 10 / 100, // Response rate for active conversations
   RANDOM_WEIGHT: 1 / 100, // Response rate for random responses
 
   // Activity thresholds
-  ACTIVE_CONVERSATION_THRESHOLD: 5, // Messages in timeframe
+  ACTIVE_CONVERSATION_THRESHOLD: 10, // Messages in timeframe
   ACTIVE_WINDOW: 3 * 60 * 1000, // Timeframe for activity
   FOLLOW_UP_WINDOW: 15 * 1000, // Time window for follow-up responses
 
