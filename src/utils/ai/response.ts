@@ -7,6 +7,28 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type CoreMessage } from "ai";
 import type { Embed, Message } from "discord.js";
 
+/**
+ * Converts an image URL to base64 format for AI processing
+ */
+async function imageUrlToBase64(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.error(`Failed to fetch image: ${response.status}`);
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+
+    return `data:${contentType};base64,${base64}`;
+  } catch (error) {
+    console.error("Error converting image to base64:", error);
+    return null;
+  }
+}
+
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY!,
@@ -22,7 +44,6 @@ export async function generateAIResponse(message: Message): Promise<string> {
   // Optimize user context building
   const userMap = new Map<string, { username: string; displayName: string }>();
   const recentUsers: [string, string, string][] = [];
-  const processedMessages: string[] = [];
 
   // Build user map from recent messages first (more efficient)
   for (const msg of messages.values()) {
@@ -68,14 +89,34 @@ export async function generateAIResponse(message: Message): Promise<string> {
       recentUsers.push([userId, userData.username, userData.displayName]);
     }
   }
-
-  // Process messages more efficiently
+  // Process messages into structured format for multiple user messages
   const messageArray = Array.from(messages.values()).reverse();
+  const processedMessages: CoreMessage[] = [];
+
+  function embedToPlainText(embed: Embed): string {
+    let text = "";
+
+    if (embed.title) text += `## ${embed.title}`;
+    if (embed.description) text += `: ${embed.description}\n`;
+
+    if (embed.fields && embed.fields.length > 0) {
+      for (const field of embed.fields) {
+        text += `\n${field.name}:\n${field.value}\n`;
+      }
+    }
+
+    if (embed.author?.name) text += `\nAuthor: ${embed.author.name}`;
+    if (embed.footer?.text) text += `\nFooter: ${embed.footer.text}`;
+    if (embed.url) text += `\nURL: ${embed.url}`;
+    if (embed.timestamp) text += `\nTimestamp: ${embed.timestamp}`;
+
+    return text.trim();
+  }
 
   for (let i = 0; i < messageArray.length; i++) {
     const msg = messageArray[i]!;
 
-    // Skip empty messages
+    // Skip empty messages unless they have attachments
     if (
       !msg.content.trim() &&
       msg.attachments.size === 0 &&
@@ -92,41 +133,19 @@ export async function generateAIResponse(message: Message): Promise<string> {
       );
     }
 
-    function embedToPlainText(embed: Embed): string {
-      let text = "";
-
-      if (embed.title) text += `## ${embed.title}`;
-      if (embed.description) text += `: ${embed.description}\n`;
-
-      if (embed.fields && embed.fields.length > 0) {
-        for (const field of embed.fields) {
-          text += `\n${field.name}:\n${field.value}\n`;
-        }
-      }
-
-      if (embed.author?.name) text += `\nAuthor: ${embed.author.name}`;
-      if (embed.footer?.text) text += `\nFooter: ${embed.footer.text}`;
-      if (embed.url) text += `\nURL: ${embed.url}`;
-      if (embed.timestamp) text += `\nTimestamp: ${embed.timestamp}`;
-
-      return text.trim();
-    }
-
     // Handle embeds
     if (msg.embeds.length > 0) {
-      processedContent += msg.embeds.map(embedToPlainText).join("\n\n");
+      processedContent +=
+        (processedContent ? "\n\n" : "") +
+        msg.embeds.map(embedToPlainText).join("\n\n");
     }
 
-    // Handle attachments
-    if (msg.attachments.size > 0) {
-      const attachmentTypes = Array.from(msg.attachments.values())
-        .map((att) => att.contentType?.split("/")[0] || "file")
-        .join(", ");
-      processedContent += ` [shared ${attachmentTypes}]`;
-    }
+    // Build message content array with proper attachment handling
+    const messageContent: Array<
+      { type: "text"; text: string } | { type: "image"; image: string }
+    > = [];
 
-    // Optimize reply context - check if reply target is in recent messages first
-    let replyContext = "";
+    // Add reply context if exists
     if (msg.reference?.messageId) {
       // First check if replied message is in our fetched messages
       const repliedMessage = messageArray.find(
@@ -144,7 +163,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
             `@${user.username}`,
           );
         }
-        replyContext = ` (replying to @${repliedMessage.author.username}: "${repliedContent}")`;
+        processedContent = `(replying to @${repliedMessage.author.username}: "${repliedContent}")\n\n${processedContent}`;
       } else {
         // Only fetch if not in recent messages
         try {
@@ -156,27 +175,101 @@ export async function generateAIResponse(message: Message): Promise<string> {
               fetchedReply.content.length > 60
                 ? fetchedReply.content.substring(0, 60) + "..."
                 : fetchedReply.content;
-            replyContext = ` (replying to @${fetchedReply.author.username}: "${repliedContent}")`;
+            processedContent = `(replying to @${fetchedReply.author.username}: "${repliedContent}")\n\n${processedContent}`;
           }
         } catch {
-          replyContext = " (replying to a message)";
+          processedContent = "(replying to a message)\n\n" + processedContent;
         }
       }
     }
 
-    // Limit message length for token efficiency
-    const truncatedContent =
-      processedContent.length > 200
-        ? processedContent.substring(0, 200) + "..."
-        : processedContent;
+    // Add text content if present
+    if (processedContent.trim()) {
+      const truncatedContent =
+        processedContent.length > 200
+          ? processedContent.substring(0, 200) + "..."
+          : processedContent;
 
-    processedMessages.push(
-      `@${msg.author.username}: ${truncatedContent}${replyContext}`,
-    );
+      messageContent.push({
+        type: "text",
+        text: `@${msg.author.username}: ${truncatedContent}`,
+      });
+    } else if (msg.attachments.size > 0) {
+      // If no text but has attachments, add username context
+      messageContent.push({
+        type: "text",
+        text: `@${msg.author.username}:`,
+      });
+    }
+
+    // Handle attachments with proper types
+    for (const attachment of msg.attachments.values()) {
+      const contentType = attachment.contentType || "";
+
+      if (contentType.startsWith("image/")) {
+        try {
+          const base64Image = await imageUrlToBase64(attachment.url);
+          if (base64Image) {
+            messageContent.push({
+              type: "image",
+              image: base64Image,
+            });
+          } else {
+            // Fallback to text description if image conversion fails
+            messageContent.push({
+              type: "text",
+              text: `[Image: ${attachment.name}]`,
+            });
+          }
+        } catch (error) {
+          console.error("Error processing image attachment:", error);
+          messageContent.push({
+            type: "text",
+            text: `[Image: ${attachment.name}]`,
+          });
+        }
+      } else {
+        // Handle as file
+        try {
+          // For non-image files, we'll include them as file references
+          messageContent.push({
+            type: "text",
+            text: `[File: ${attachment.name} (${contentType || "unknown type"})]`,
+          });
+        } catch (error) {
+          console.error("Error processing file attachment:", error);
+          messageContent.push({
+            type: "text",
+            text: `[File: ${attachment.name}]`,
+          });
+        }
+      }
+    }
+
+    // Only add message if it has meaningful content
+    if (messageContent.length > 0) {
+      // Ensure we don't add empty text messages
+      const hasValidContent = messageContent.some((content) => {
+        if (content.type === "text") {
+          return content.text && content.text.trim().length > 0;
+        }
+        return content.type === "image" && content.image;
+      });
+
+      if (hasValidContent) {
+        processedMessages.push({
+          role: "user" as const,
+          content:
+            messageContent.length === 1 && messageContent[0]?.type === "text"
+              ? messageContent[0].text
+              : messageContent,
+        });
+      }
+    }
   }
 
   // Optimize context building
-  const messageHistory = processedMessages.slice(-15).join("\n");
+  const recentMessagesForContext = processedMessages.slice(-15);
   const pingableUsers = recentUsers
     .filter(([_id, username]) => username !== client.user?.username)
     .slice(0, 8); // Reduce to 8 users for token efficiency
@@ -219,25 +312,40 @@ export async function generateAIResponse(message: Message): Promise<string> {
     console.error("Error fetching memories:", error);
   }
 
-  // Build optimized prompt
+  // Build optimized prompt with multiple user messages
   const systemPrompt = buildSystemPrompt(pingableUsers, memoryContext);
-  const userPrompt = `Recent conversation:\n${messageHistory}\n\nRespond to @${message.author.username}'s latest message. Keep responses conversational and engaging.`;
 
   const promptMessages: CoreMessage[] = [
     {
       role: "system",
       content: systemPrompt,
     },
-    {
-      role: "user",
-      content: userPrompt,
-    },
   ];
+
+  // Add context message and processed messages only if we have content
+  if (recentMessagesForContext.length > 0) {
+    promptMessages.push({
+      role: "user",
+      content: `Recent conversation context. Respond to @${message.author.username}'s latest message. Keep responses conversational and engaging.`,
+    });
+    promptMessages.push(...recentMessagesForContext);
+  } else {
+    // Fallback if no messages could be processed
+    promptMessages.push({
+      role: "user",
+      content: `@${message.author.username} sent a message. Respond conversationally and engage with them.`,
+    });
+  }
 
   // Create AI tools with message context
   const tools = createAITools(message, pingableUsers);
 
   try {
+    // Ensure we have at least a system message and one user message
+    if (promptMessages.length < 2) {
+      throw new Error("Insufficient message context for AI generation");
+    }
+
     const { text } = await generateText({
       model: openrouter("google/gemini-2.5-flash"),
       messages: promptMessages,

@@ -1,10 +1,13 @@
 import { client } from "@/client";
-import { addTyposWithCorrection, TYPO_CONFIG } from "@/utils/ai/typo";
 import { generateAIResponse } from "@/utils/ai/response";
+import { addTyposWithCorrection, TYPO_CONFIG } from "@/utils/ai/typo";
 import { CooldownManager } from "@/utils/cooldown";
 import percent from "@/utils/percent";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { generateObject } from "ai";
 import type { DMChannel, Message, TextChannel } from "discord.js";
 import { ChannelType, Events } from "discord.js";
+import z from "zod";
 
 export const name = "AIController";
 export const type = Events.MessageCreate;
@@ -64,7 +67,7 @@ const CONFIG = {
   REPLY_WEIGHT: 100 / 100, // Response rate for replies
   DM_WEIGHT: 100 / 100, // Response rate for DMs
   FOLLOW_UP_WEIGHT: 60 / 100, // Response rate for indirect responses
-  ACTIVE_WEIGHT: 10 / 100, // Response rate for active conversations
+  ACTIVE_WEIGHT: 4 / 100, // Response rate for active conversations
   RANDOM_WEIGHT: 1 / 100, // Response rate for random responses
 
   // Activity thresholds
@@ -77,7 +80,17 @@ const CONFIG = {
   TYPING_SPEED: 60, // Characters per second
   MIN_TYPING_TIME: 1 * 1000, // Minimum typing time
   MAX_TYPING_TIME: 6 * 1000, // Maximum typing time
+
+  // AI relevance detection - now uses score-based weight multiplication
+  RELEVANCE_CHECK_ENABLED: true,
+  RELEVANCE_THRESHOLD: 0.65, // Minimum relevance score (0.0-1.0) to consider responding
 };
+
+// Configure OpenRouter for fast relevance checks
+const openrouter = createOpenRouter({
+  apiKey: process.env.OPENROUTER_API_KEY!,
+  extraBody: { provider: { sort: "latency" } },
+});
 
 /**
  * Checks if the bot is mentioned in various ways (pings, names, etc.)
@@ -170,21 +183,121 @@ async function isFollowUpToFrank(message: Message): Promise<boolean> {
 }
 
 /**
- * Calculates intelligent response probability based on context
+ * Uses fast AI model to score message relevance for Frank (0.0-1.0)
+ * Returns relevance score that multiplies the base response probability
+ * Higher scores = more likely to respond with full weight
+ */
+async function isMessageRelevantToFrank(message: Message): Promise<number> {
+  if (!CONFIG.RELEVANCE_CHECK_ENABLED) return 1.0;
+
+  const startTime = Date.now();
+
+  try {
+    // Get some context from recent messages for better relevance detection
+    const recentMessages = await message.channel.messages.fetch({ limit: 5 });
+    const context = Array.from(recentMessages.values())
+      .reverse()
+      .map((msg) => `@${msg.author.username}: ${msg.content.slice(0, 100)}`)
+      .join("\n");
+
+    const prompt = `You are Frank, a casual and friendly Discord chatbot, analyzing message relevance for response decisions.
+
+Context: Frank should engage naturally in conversations while being helpful and entertaining. Frank has personality - he's witty, sometimes sarcastic, but always friendly.
+
+Recent conversation:
+${context}
+
+Current message from @${message.author.username}: ${message.content.slice(0, 200)}
+
+Analyze this message and provide three scores. TALKING_TO_FRANK (boolean): Is this message directed at Frank specifically?
+   - true: Direct mentions, replies to Frank, questions/requests aimed at Frank
+   - false: General conversation, talking to others, not specifically for Frank
+
+2. RELEVANCY_TO_FRANK (0.0-1.0): How relevant is this content for Frank to engage with?
+
+   HIGHLY RELEVANT (0.8-1.0):
+   - Direct questions or requests for help
+   - Engaging topics Frank could contribute meaningfully to
+   - Jokes, memes, or humor Frank could build on
+   - Technical discussions where Frank's knowledge helps
+   - Conversation starters or open-ended statements
+
+   MODERATELY RELEVANT (0.5-0.7):
+   - General chat Frank could naturally join
+   - Reactions to previous messages Frank could comment on
+   - Casual observations or experiences
+   - Light complaints or celebrations Frank could respond to
+
+   LESS RELEVANT (0.2-0.4):
+   - Brief acknowledgments ("ok", "thanks", "lol")
+   - Very personal/private conversations between specific users
+   - Inside jokes without context
+   - Messages already fully resolved
+
+   NOT RELEVANT (0.0-0.1):
+   - Spam, gibberish, or abuse
+   - Bot commands for other bots
+   - Messages clearly not meant for conversation
+   - Automated messages or system notifications
+
+3. CONFIDENCE (0.0-1.0): How confident are you in your assessment?
+   - 1.0: Very clear and obvious
+   - 0.8: Pretty confident
+   - 0.6: Somewhat confident
+   - 0.4: Uncertain
+   - 0.2: Very uncertain
+
+YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.content.slice(0, 200)}. DO NOT USE CONTEXT TO DETERMINE RELEVANCE.`;
+
+    const { object: output } = await generateObject({
+      model: openrouter("google/gemini-2.5-flash-lite"),
+      prompt,
+      schema: z.object({
+        talking_to_frank: z.boolean(),
+        relevancy_to_frank: z.number().min(0).max(1),
+        confidence: z.number().min(0).max(1),
+      }),
+      maxTokens: 300,
+      temperature: 0.1,
+    });
+
+    const responseTime = Date.now() - startTime;
+    const score =
+      (output.talking_to_frank ? 1 : 0.7) *
+      output.relevancy_to_frank *
+      output.confidence;
+
+    console.log(
+      `Relevance check (${responseTime}ms): ${score.toFixed(2)} for "${message.content.slice(0, 50)}${message.content.length > 50 ? "..." : ""}"`,
+    );
+
+    return score;
+  } catch (error) {
+    const errorTime = Date.now() - startTime;
+    console.error(`Error in AI relevance check (${errorTime}ms):`, error);
+
+    return 0.5; // Default fallback score
+  }
+}
+
+/**
+ * Calculate probability of responding to a message based on context
+ * Now multiplies base weights by relevance score (0.0-1.0) for nuanced responses
  */
 function calculateResponseProbability(
   message: Message,
   isMentioned: boolean,
   isReplyToBot: boolean,
   isFollowUp: boolean,
+  relevanceScore: number = 1.0,
 ): number {
-  if (isMentioned) return CONFIG.MENTION_WEIGHT;
-  if (isReplyToBot) return CONFIG.REPLY_WEIGHT;
-  if (isFollowUp) return CONFIG.FOLLOW_UP_WEIGHT;
+  if (isMentioned) return CONFIG.MENTION_WEIGHT * relevanceScore;
+  if (isReplyToBot) return CONFIG.REPLY_WEIGHT * relevanceScore;
+  if (isFollowUp) return CONFIG.FOLLOW_UP_WEIGHT * relevanceScore;
 
   // High response rate for DMs since user is directly messaging Frank
   if (message.channel.type === ChannelType.DM) {
-    return CONFIG.DM_WEIGHT;
+    return CONFIG.DM_WEIGHT * relevanceScore;
   }
 
   // Check conversation activity BEFORE updating it
@@ -198,11 +311,11 @@ function calculateResponseProbability(
       activity.messageCount >= CONFIG.ACTIVE_CONVERSATION_THRESHOLD;
 
     if (isActiveConversation) {
-      return CONFIG.ACTIVE_WEIGHT;
+      return CONFIG.ACTIVE_WEIGHT * relevanceScore;
     }
   }
 
-  return CONFIG.RANDOM_WEIGHT;
+  return CONFIG.RANDOM_WEIGHT * relevanceScore;
 }
 
 /**
@@ -565,7 +678,7 @@ async function sendResponse(
         // Send message
         let sentMessage: Message;
         if (isFirstMessage) {
-          sentMessage = await message.reply(chunk);
+          sentMessage = await message.reply({ content: chunk });
           isFirstMessage = false;
         } else {
           // Check if someone interrupted
@@ -574,13 +687,13 @@ async function sendResponse(
             const lastMessage = recentMessages.first();
 
             if (lastMessage && lastMessage.author.id !== client.user?.id) {
-              sentMessage = await message.reply(chunk);
+              sentMessage = await message.reply({ content: chunk });
             } else {
-              sentMessage = await channel.send(chunk);
+              sentMessage = await channel.send({ content: chunk });
             }
           } catch (error) {
             console.error("Error checking recent messages:", error);
-            sentMessage = await channel.send(chunk);
+            sentMessage = await channel.send({ content: chunk });
           }
         }
 
@@ -646,16 +759,27 @@ export async function execute(message: Message) {
     // Check if this is a follow-up to Frank's message
     const isFollowUp = await isFollowUpToFrank(message);
 
+    // Get AI relevance score (0.0-1.0) for probability weight calculation
+    const relevanceScore = await isMessageRelevantToFrank(message);
+
+    // For non-direct interactions, check if relevance meets minimum threshold
+    // Direct interactions (mentions/replies) bypass this check but still use score for weighting
+    if (!isMentioned && !isReplyToBot && !isFollowUp) {
+      if (relevanceScore < CONFIG.RELEVANCE_THRESHOLD) return; // Skip irrelevant messages early
+    }
+
     // Update activity tracking FIRST so current message counts
     updateChannelActivity(message);
 
     // Calculate response probability AFTER updating activity
-    const responseProbability = calculateResponseProbability(
-      message,
-      isMentioned,
-      isReplyToBot,
-      isFollowUp,
-    );
+    // const responseProbability = calculateResponseProbability(
+    //   message,
+    //   isMentioned,
+    //   isReplyToBot,
+    //   isFollowUp,
+    //   relevanceScore,
+    // );
+    const responseProbability = relevanceScore;
     const shouldRespond = Math.random() < responseProbability;
 
     if (!shouldRespond) return;
