@@ -6,22 +6,15 @@ import percent from "@/utils/percent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateObject } from "ai";
 import type { DMChannel, Message, TextChannel } from "discord.js";
-import { ChannelType, Events } from "discord.js";
+import { Events } from "discord.js";
 import z from "zod";
 
 export const name = "AIController";
 export const type = Events.MessageCreate;
 
 // Rate limiting and cooldown management
-const channelActivity = new Map<
-  string,
-  { lastMessage: number; messageCount: number }
->();
 const processingMessages = new Set<string>();
 const processingChannels = new Set<string>(); // Track channels currently processing responses
-
-// Message tracking for special tokens
-const sentMessages = new Map<string, Message[]>();
 
 // Special token interfaces
 interface DeleteToken {
@@ -55,25 +48,13 @@ type MessageItem = SpecialToken | TextChunk;
 // Configuration
 const CONFIG = {
   // Cooldown periods (in milliseconds)
-  USER_COOLDOWN: 4 * 1000, // Seconds between responses to same user
-  CHANNEL_COOLDOWN: 1.5 * 1000, // Seconds between any responses in channel
+  USER_COOLDOWN: 3 * 1000, // Seconds between responses to same user
+  CHANNEL_COOLDOWN: 1 * 1000, // Seconds between any responses in channel
+
+  // Special tokens
   LONG_PAUSE_DURATION: 1.5 * 1000, // Duration for ::long_pause tokens
-  // Delay ranges for token execution (min, max in milliseconds)
-  DELETE_DELAY_RANGE: [0.8 * 1000, 2.2 * 1000] as const, // Delay before delete
-  EDIT_DELAY_RANGE: [1.2 * 1000, 2 * 1000] as const, // Delay before edit
-
-  // Response probability weights
-  MENTION_WEIGHT: 100 / 100, // Response rate for mentions
-  REPLY_WEIGHT: 100 / 100, // Response rate for replies
-  DM_WEIGHT: 100 / 100, // Response rate for DMs
-  FOLLOW_UP_WEIGHT: 60 / 100, // Response rate for indirect responses
-  ACTIVE_WEIGHT: 4 / 100, // Response rate for active conversations
-  RANDOM_WEIGHT: 1 / 100, // Response rate for random responses
-
-  // Activity thresholds
-  ACTIVE_CONVERSATION_THRESHOLD: 10, // Messages in timeframe
-  ACTIVE_WINDOW: 3 * 60 * 1000, // Timeframe for activity
-  FOLLOW_UP_WINDOW: 15 * 1000, // Time window for follow-up responses
+  DELETE_DELAY_RANGE: [0.8 * 1000, 2.2 * 1000], // Delay before ::delete_last_messages
+  EDIT_DELAY_RANGE: [1.2 * 1000, 2 * 1000], // Delay before ::edit_last_message
 
   // Message chunking
   MAX_CHUNK_LENGTH: 1800, // Leave room for Discord's 2000 limit
@@ -81,9 +62,8 @@ const CONFIG = {
   MIN_TYPING_TIME: 1 * 1000, // Minimum typing time
   MAX_TYPING_TIME: 6 * 1000, // Maximum typing time
 
-  // AI relevance detection - now uses score-based weight multiplication
-  RELEVANCE_CHECK_ENABLED: true,
-  RELEVANCE_THRESHOLD: 0.65, // Minimum relevance score (0.0-1.0) to consider responding
+  // Relevance detection
+  MINIMUM_RELEVANCE: 0.4, // Minimum relevance score (0.0-1.0) to consider responding
 };
 
 // Configure OpenRouter for fast relevance checks
@@ -153,43 +133,11 @@ function isBotMentioned(message: Message): boolean {
 }
 
 /**
- * Checks if the previous message in the channel was from Frank within the follow-up window
- */
-async function isFollowUpToFrank(message: Message): Promise<boolean> {
-  try {
-    // Fetch the last few messages from the channel
-    const messages = await message.channel.messages.fetch({
-      limit: 1,
-      before: message.id,
-    });
-
-    if (messages.size === 0) return false;
-
-    // Get the most recent message before the current one
-    const previousMessage = messages.first();
-    if (!previousMessage) return false;
-
-    // Check if it's from Frank and within the time window
-    const isFrankMessage = previousMessage.author.id === client.user?.id;
-    const timeDiff =
-      message.createdTimestamp - previousMessage.createdTimestamp;
-    const withinWindow = timeDiff <= CONFIG.FOLLOW_UP_WINDOW;
-
-    return isFrankMessage && withinWindow;
-  } catch (error) {
-    console.error("Error checking follow-up to Frank:", error);
-    return false;
-  }
-}
-
-/**
  * Uses fast AI model to score message relevance for Frank (0.0-1.0)
  * Returns relevance score that multiplies the base response probability
  * Higher scores = more likely to respond with full weight
  */
 async function isMessageRelevantToFrank(message: Message): Promise<number> {
-  if (!CONFIG.RELEVANCE_CHECK_ENABLED) return 1.0;
-
   const startTime = Date.now();
 
   try {
@@ -264,13 +212,10 @@ YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.con
     });
 
     const responseTime = Date.now() - startTime;
-    console.log(output);
     const score =
-      (output.talking ? 1 : 0.7) * output.relevancy * output.confidence;
-
-    console.log(
-      `Relevance check (${responseTime}ms): ${score.toFixed(2)} for "${message.content.slice(0, 50)}${message.content.length > 50 ? "..." : ""}"`,
-    );
+      (output.talking ? 1 : 0.7) *
+      output.relevancy ** 1.33 *
+      output.confidence ** 1.33;
 
     return score;
   } catch (error) {
@@ -283,56 +228,19 @@ YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.con
 
 /**
  * Calculate probability of responding to a message based on context
- * Now multiplies base weights by relevance score (0.0-1.0) for nuanced responses
  */
-function calculateResponseProbability(
+async function calculateResponseProbability(
   message: Message,
   isMentioned: boolean,
   isReplyToBot: boolean,
-  isFollowUp: boolean,
-  relevanceScore: number = 1.0,
-): number {
-  if (isMentioned) return CONFIG.MENTION_WEIGHT * relevanceScore;
-  if (isReplyToBot) return CONFIG.REPLY_WEIGHT * relevanceScore;
-  if (isFollowUp) return CONFIG.FOLLOW_UP_WEIGHT * relevanceScore;
+): Promise<number> {
+  if (isMentioned) return 1;
+  if (isReplyToBot) return 1;
 
-  // High response rate for DMs since user is directly messaging Frank
-  if (message.channel.type === ChannelType.DM) {
-    return CONFIG.DM_WEIGHT * relevanceScore;
-  }
+  const relevance = await isMessageRelevantToFrank(message);
+  if (relevance < CONFIG.MINIMUM_RELEVANCE) return 0;
 
-  // Check conversation activity BEFORE updating it
-  const channelId = message.channel.id;
-  const activity = channelActivity.get(channelId);
-
-  if (activity) {
-    const timeSinceLastMessage = Date.now() - activity.lastMessage;
-    const isActiveConversation =
-      timeSinceLastMessage < CONFIG.ACTIVE_WINDOW &&
-      activity.messageCount >= CONFIG.ACTIVE_CONVERSATION_THRESHOLD;
-
-    if (isActiveConversation) {
-      return CONFIG.ACTIVE_WEIGHT * relevanceScore;
-    }
-  }
-
-  return CONFIG.RANDOM_WEIGHT * relevanceScore;
-}
-
-/**
- * Updates channel activity tracking
- */
-function updateChannelActivity(message: Message) {
-  const channelId = message.channel.id;
-  const now = Date.now();
-  const activity = channelActivity.get(channelId);
-
-  if (activity && now - activity.lastMessage < CONFIG.ACTIVE_WINDOW) {
-    activity.messageCount++;
-    activity.lastMessage = now;
-  } else {
-    channelActivity.set(channelId, { lastMessage: now, messageCount: 1 });
-  }
+  return relevance;
 }
 
 /**
@@ -506,7 +414,6 @@ function parseMessageSequence(text: string): MessageItem[] {
  * Executes a delete token by removing the last n messages from Frank
  */
 async function executeDeleteToken(
-  channel: TextChannel | DMChannel,
   token: DeleteToken,
   channelMessages: Message[],
 ) {
@@ -527,11 +434,7 @@ async function executeDeleteToken(
 /**
  * Executes an edit token by modifying the nth to last message
  */
-async function executeEditToken(
-  channel: TextChannel | DMChannel,
-  token: EditToken,
-  channelMessages: Message[],
-) {
+async function executeEditToken(token: EditToken, channelMessages: Message[]) {
   // messageIndex 1 means the last message, 2 means second to last, etc.
   const messageIndex = channelMessages.length - token.messageIndex;
 
@@ -560,7 +463,6 @@ async function executePauseToken() {
  * Executes a reaction token by finding the last message not from Frank and reacting to it
  */
 async function executeReactionToken(
-  channel: TextChannel | DMChannel,
   token: ReactionToken,
   originalMessage: Message,
 ) {
@@ -575,7 +477,7 @@ async function executeReactionToken(
 /**
  * Calculates a random delay within the specified range
  */
-function getRandomDelay(range: readonly [number, number]): number {
+function getRandomDelay(range: [number, number]): number {
   const [min, max] = range;
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
@@ -615,12 +517,8 @@ async function sendResponse(
     return;
   }
 
-  // Create a unique session ID for this response
-  const sessionId = `${channel.id}_${Date.now()}_${Math.random()}`;
-
   // Initialize sent messages tracking for this response session
   const sessionMessages: Message[] = [];
-  sentMessages.set(sessionId, sessionMessages);
 
   let isFirstMessage = true;
 
@@ -704,23 +602,24 @@ async function sendResponse(
       await executePauseToken();
     } else if (item.type === "delete") {
       // Give users time to read the content before deleting
-      const deleteDelay = getRandomDelay(CONFIG.DELETE_DELAY_RANGE);
+      const deleteDelay = getRandomDelay(
+        CONFIG.DELETE_DELAY_RANGE as [number, number],
+      );
       await new Promise((resolve) => setTimeout(resolve, deleteDelay));
 
-      await executeDeleteToken(channel, item, sessionMessages);
+      await executeDeleteToken(item, sessionMessages);
     } else if (item.type === "edit") {
       // Give users time to read the content before editing
-      const editDelay = getRandomDelay(CONFIG.EDIT_DELAY_RANGE);
+      const editDelay = getRandomDelay(
+        CONFIG.EDIT_DELAY_RANGE as [number, number],
+      );
       await new Promise((resolve) => setTimeout(resolve, editDelay));
 
-      await executeEditToken(channel, item, sessionMessages);
+      await executeEditToken(item, sessionMessages);
     } else if (item.type === "reaction") {
-      await executeReactionToken(channel, item, message);
+      await executeReactionToken(item, message);
     }
   }
-
-  // Clean up session tracking
-  sentMessages.delete(sessionId);
 }
 
 export async function execute(message: Message) {
@@ -757,42 +656,17 @@ export async function execute(message: Message) {
       }
     })();
 
-    // Check if this is a follow-up to Frank's message
-    const isFollowUp = await isFollowUpToFrank(message);
-
-    // Get AI relevance score (0.0-1.0) for probability weight calculation
-    const relevanceScore = await isMessageRelevantToFrank(message);
-
-    // For non-direct interactions, check if relevance meets minimum threshold
-    // Direct interactions (mentions/replies) bypass this check but still use score for weighting
-    if (!isMentioned && !isReplyToBot && !isFollowUp) {
-      if (relevanceScore < CONFIG.RELEVANCE_THRESHOLD) return; // Skip irrelevant messages early
-    }
-
-    // Update activity tracking FIRST so current message counts
-    updateChannelActivity(message);
+    // Check cooldowns (but allow mentions and replies to override)
+    if (!isMentioned && !isReplyToBot && (await isOnCooldown(message))) return;
 
     // Calculate response probability AFTER updating activity
-    // const responseProbability = calculateResponseProbability(
-    //   message,
-    //   isMentioned,
-    //   isReplyToBot,
-    //   isFollowUp,
-    //   relevanceScore,
-    // );
-    const responseProbability = relevanceScore;
-    const shouldRespond = Math.random() < responseProbability;
+    const responseProbability = await calculateResponseProbability(
+      message,
+      isMentioned,
+      isReplyToBot,
+    );
 
-    if (!shouldRespond) return;
-
-    // Check cooldowns (but allow mentions, replies, and follow-ups to override)
-    if (
-      !isMentioned &&
-      !isReplyToBot &&
-      !isFollowUp &&
-      (await isOnCooldown(message))
-    )
-      return;
+    if (!percent(responseProbability * 100)) return;
 
     // Mark as processing
     processingMessages.add(messageKey);
@@ -848,26 +722,3 @@ export async function execute(message: Message) {
     }
   }
 }
-
-// Cleanup old activity data periodically (every 10 minutes)
-setInterval(
-  () => {
-    const now = Date.now();
-    const cutoff = now - CONFIG.ACTIVE_WINDOW * 2; // Keep data for 2x the window
-
-    // Clean up channel activity
-    for (const [key, activity] of channelActivity.entries()) {
-      if (activity.lastMessage < cutoff) {
-        channelActivity.delete(key);
-      }
-    }
-
-    // Clean up old sent messages (keep last 20 per channel for special tokens)
-    for (const [channelId, messages] of sentMessages.entries()) {
-      if (messages.length > 20) {
-        sentMessages.set(channelId, messages.slice(-20));
-      }
-    }
-  },
-  10 * 60 * 1000,
-);
