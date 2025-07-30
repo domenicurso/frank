@@ -209,11 +209,13 @@ ${context}
 
 Current message from @${message.author.username}: ${message.content.slice(0, 200)}
 
-Analyze this message and provide three scores. TALKING_TO_FRANK (boolean): Is this message directed at Frank specifically?
+Analyze this message and provide three scores.
+
+1. TALKING (boolean): Is this message directed at Frank specifically?
    - true: Direct mentions, replies to Frank, questions/requests aimed at Frank
    - false: General conversation, talking to others, not specifically for Frank
 
-2. RELEVANCY_TO_FRANK (0.0-1.0): How relevant is this content for Frank to engage with?
+2. RELEVANCY (0.0-1.0): How relevant is this content for Frank to engage with?
 
    HIGHLY RELEVANT (0.8-1.0):
    - Direct questions or requests for help
@@ -253,8 +255,8 @@ YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.con
       model: openrouter("google/gemini-2.5-flash-lite"),
       prompt,
       schema: z.object({
-        talking_to_frank: z.boolean(),
-        relevancy_to_frank: z.number().min(0).max(1),
+        talking: z.boolean(),
+        relevancy: z.number().min(0).max(1),
         confidence: z.number().min(0).max(1),
       }),
       maxTokens: 300,
@@ -262,10 +264,9 @@ YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.con
     });
 
     const responseTime = Date.now() - startTime;
+    console.log(output);
     const score =
-      (output.talking_to_frank ? 1 : 0.7) *
-      output.relevancy_to_frank *
-      output.confidence;
+      (output.talking ? 1 : 0.7) * output.relevancy * output.confidence;
 
     console.log(
       `Relevance check (${responseTime}ms): ${score.toFixed(2)} for "${message.content.slice(0, 50)}${message.content.length > 50 ? "..." : ""}"`,
