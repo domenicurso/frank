@@ -1,10 +1,8 @@
 import { client } from "@/client";
-import {
-  addTyposWithCorrection,
-  shouldApplyTypos,
-} from "@/utils/ai/personality";
+import { addTyposWithCorrection, TYPO_CONFIG } from "@/utils/ai/personality";
 import { generateAIResponse } from "@/utils/ai/response";
 import { CooldownManager } from "@/utils/cooldown";
+import percent from "@/utils/percent";
 import type { DMChannel, Message, TextChannel } from "discord.js";
 import { ChannelType, Events } from "discord.js";
 
@@ -54,8 +52,8 @@ type MessageItem = SpecialToken | TextChunk;
 // Configuration
 const CONFIG = {
   // Cooldown periods (in milliseconds)
-  USER_COOLDOWN: 10 * 1000, // Seconds between responses to same user
-  CHANNEL_COOLDOWN: 6 * 1000, // Seconds between any responses in channel
+  USER_COOLDOWN: 4 * 1000, // Seconds between responses to same user
+  CHANNEL_COOLDOWN: 1.5 * 1000, // Seconds between any responses in channel
   LONG_PAUSE_DURATION: 1.5 * 1000, // Duration for ::long_pause tokens
   // Delay ranges for token execution (min, max in milliseconds)
   DELETE_DELAY_RANGE: [0.8 * 1000, 2.2 * 1000] as const, // Delay before delete
@@ -519,19 +517,37 @@ async function sendResponse(
       for (let i = 0; i < chunks.length; i++) {
         let chunk = chunks[i]!;
 
-        // Apply typos to individual chunks (but not if sequence has delete/edit tokens)
-        const hasEditOrDeleteTokens = sequence.some(
-          (item) => item.type === "delete" || item.type === "edit",
-        );
+        // Apply typos to individual chunks, but skip if this chunk will be affected by edit/delete tokens
+        const willBeAffectedBySpecialToken = (() => {
+          // The current chunk will become message at index i (0-based)
+          const currentMessageIndex = i;
+          const totalMessages = chunks.length;
 
-        if (!hasEditOrDeleteTokens && chunk.trim().length > 0) {
-          const context = {
-            isExcited: /!{2,}|[A-Z]{3,}/.test(chunk),
-            isRushed: chunk.length > 100,
-            isLongMessage: chunk.length > 50,
-          };
+          // Look ahead in the sequence for tokens that might affect this chunk
+          for (const futureItem of sequence) {
+            if (futureItem.type === "edit") {
+              // Edit tokens affect a specific message by index
+              if (currentMessageIndex === futureItem.messageIndex) {
+                return true;
+              }
+            }
 
-          if (shouldApplyTypos(chunk, context)) {
+            if (futureItem.type === "delete") {
+              // Delete tokens affect the last 'count' messages
+              // Check if current message is within the last 'count' messages
+              const isInDeleteRange =
+                currentMessageIndex >= totalMessages - futureItem.count;
+              if (isInDeleteRange) {
+                return true;
+              }
+            }
+          }
+
+          return false;
+        })();
+
+        if (!willBeAffectedBySpecialToken && chunk.trim().length > 0) {
+          if (percent(TYPO_CONFIG.typoChance * 100)) {
             chunk = addTyposWithCorrection(chunk);
           }
         }
@@ -665,37 +681,6 @@ export async function execute(message: Message) {
 
       // Generate AI response
       const response = await generateAIResponse(message);
-
-      //       const response = `bet I'm on it
-      // ::long_pause
-      // this finna be good
-      // ::long_pause
-      // you better be ready for this heat
-      // ::delete_last_messages 1
-      // i mean
-      // ::edit_last_message i hope you're ready
-      // cause here it comes
-      // ::long_pause
-      // your face looks like a potato
-      // ::delete_last_messages 1
-      // lmao jk
-      // you're alright sometimes
-      // ::long_pause
-      // but seriously though
-      // you need to clean your room
-      // ::edit_last_message you should probably clean your room
-      // cause it's a mess
-      // ::long_pause
-      // i saw that pizza box from last week
-      // ::delete_last_messages 1
-      // nah i'm just messing with you
-      // ::long_pause
-      // or am i
-      // ::edit_last_message or am i not
-      // you'll never know
-      // ::long_pause
-      // so what do you think
-      // did i cook or what`;
 
       if (!response || response.trim().length === 0) {
         await message.reply(

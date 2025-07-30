@@ -1,5 +1,5 @@
-import { Events, Message } from "discord.js";
 import { trackMessageSent } from "@/database/userStats";
+import { Events, Message } from "discord.js";
 
 export const name = "MessageStats";
 export const type = Events.MessageCreate;

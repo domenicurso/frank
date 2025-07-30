@@ -1,5 +1,4 @@
 import { trackMessageDeleted } from "@/database/userStats";
-import { isLoggingEnabled, logModerationAction } from "@/utils/moderation";
 import { Events, Message } from "discord.js";
 
 export const name = "MessageDelete";
@@ -13,20 +12,4 @@ export async function execute(message: Message) {
 
   // Decrement message count for the user
   await trackMessageDeleted(message.author.id, message.guild.id);
-
-  if (await isLoggingEnabled(message.guildId || "0", "message_deletes")) {
-    await logModerationAction(
-      message.client,
-      message.guild!,
-      "message_deletes",
-      {
-        action: "Message Deleted",
-        target: message.author,
-        additional: {
-          channel: `<#${message.channel.id}>`,
-          content: message.content,
-        },
-      },
-    );
-  }
 }

@@ -1,37 +1,37 @@
 export interface TypoConfig {
   // Probability weights for different typo types (higher = more likely)
   typoWeights: {
-    missingLetter: 25;
-    doubleLetter: 20;
-    swapAdjacent: 20;
-    wrongLetter: 15;
-    extraLetter: 10;
-    transposition: 5;
-    autocorrect: 3;
-    caseMistake: 2;
+    missingLetter: number;
+    doubleLetter: number;
+    swapAdjacent: number;
+    wrongLetter: number;
+    extraLetter: number;
+    transposition: number;
+    autocorrect: number;
+    caseMistake: number;
   };
   // Probability of applying typos (0-1)
-  typoChance: 0.15;
+  typoChance: number;
   // Minimum word length to apply typos
-  minWordLength: 3;
+  minWordLength: number;
   // Maximum typos per response
-  maxTypos: 2;
+  maxTypos: number;
 }
 
-const DEFAULT_CONFIG: TypoConfig = {
+export const TYPO_CONFIG: TypoConfig = {
   typoWeights: {
-    missingLetter: 25,
-    doubleLetter: 20,
+    missingLetter: 15,
+    doubleLetter: 10,
     swapAdjacent: 20,
-    wrongLetter: 15,
+    wrongLetter: 20,
     extraLetter: 10,
-    transposition: 5,
+    transposition: 20,
     autocorrect: 3,
     caseMistake: 2,
   },
-  typoChance: 0.15,
+  typoChance: 0,
   minWordLength: 3,
-  maxTypos: 2,
+  maxTypos: 1,
 };
 
 // Common keyboard layout mistakes
@@ -209,7 +209,7 @@ function applyTypo(word: string, typoType: TypoType): string {
 
 export function simulateTypo(
   word: string,
-  config: TypoConfig = DEFAULT_CONFIG,
+  config: TypoConfig = TYPO_CONFIG,
 ): TypoResult | null {
   if (word.length < config.minWordLength) {
     return null;
@@ -239,17 +239,11 @@ function getRandomCorrection(originalWord: string, typoType: TypoType): string {
     `*${originalWord}`,
     `**${originalWord}`,
     `${originalWord}*`,
-    `*${originalWord}*`,
   ];
 
   // Add context-aware corrections based on typo type
   if (typoType === "autocorrect") {
     corrections.push(`i meant ${originalWord}`);
-    corrections.push(`${originalWord}***`);
-  }
-
-  if (typoType === "caseMistake") {
-    corrections.push(`${originalWord}*`);
   }
 
   return corrections[Math.floor(Math.random() * corrections.length)]!;
@@ -258,7 +252,7 @@ function getRandomCorrection(originalWord: string, typoType: TypoType): string {
 // Enhanced function that can add multiple typos with varied corrections
 export function addTyposWithCorrection(
   response: string,
-  config: TypoConfig = DEFAULT_CONFIG,
+  config: TypoConfig = TYPO_CONFIG,
 ): string {
   const words = response.split(/(\s+)/); // Split on whitespace but keep the whitespace
   if (words.length < 3) return response;
@@ -344,36 +338,4 @@ export function addTyposWithCorrection(
   }
 
   return `${typoResponse}\n${corrections.join("\n")}`;
-}
-
-// Check if a response should have typos applied (based on personality/context)
-export function shouldApplyTypos(
-  response: string,
-  context?: {
-    isExcited?: boolean;
-    isRushed?: boolean;
-    isLongMessage?: boolean;
-  },
-): boolean {
-  const baseChance = DEFAULT_CONFIG.typoChance;
-  let adjustedChance = baseChance;
-
-  if (context?.isExcited) {
-    adjustedChance *= 1.5; // More likely when excited
-  }
-
-  if (context?.isRushed) {
-    adjustedChance *= 2; // Much more likely when rushed
-  }
-
-  if (context?.isLongMessage) {
-    adjustedChance *= 1.2; // Slightly more likely in long messages
-  }
-
-  // Less likely for very short responses
-  if (response.length < 20) {
-    adjustedChance *= 0.3;
-  }
-
-  return Math.random() < Math.min(adjustedChance, 0.4); // Cap at 40%
 }
