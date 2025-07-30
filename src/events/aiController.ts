@@ -1,5 +1,5 @@
 import { client } from "@/client";
-import { addTyposWithCorrection, TYPO_CONFIG } from "@/utils/ai/personality";
+import { addTyposWithCorrection, TYPO_CONFIG } from "@/utils/ai/typo";
 import { generateAIResponse } from "@/utils/ai/response";
 import { CooldownManager } from "@/utils/cooldown";
 import percent from "@/utils/percent";
