@@ -465,7 +465,7 @@ export async function getGuildConfig(
         guildId,
         whitelistedChannels: null,
         blacklistedChannels: null,
-        cooldownDuration: 30,
+        cooldownDuration: 0,
         allowedMentions: true,
         allowedReplies: true,
       });
