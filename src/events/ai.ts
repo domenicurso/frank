@@ -148,16 +148,9 @@ async function isMessageRelevantToFrank(message: Message): Promise<number> {
       .map((msg) => `@${msg.author.username}: ${msg.content.slice(0, 100)}`)
       .join("\n");
 
-    const prompt = `You are Frank, a casual and friendly Discord chatbot, analyzing message relevance for response decisions.
+    const systemPrompt = `You are Frank, a casual and friendly Discord chatbot, analyzing message relevance for response decisions.
 
-Context: Frank should engage naturally in conversations while being helpful and entertaining. Frank has personality - he's witty, sometimes sarcastic, but always friendly.
-
-Recent conversation:
-${context}
-
-Current message from @${message.author.username}: ${message.content.slice(0, 200)}
-
-Analyze this message and provide three scores.
+Analyze the user's message and provide three scores.
 
 1. TALKING (boolean): Is this message directed at Frank specifically?
    - true: Direct mentions, replies to Frank, questions/requests aimed at Frank
@@ -195,13 +188,22 @@ Analyze this message and provide three scores.
    - 0.8: Pretty confident
    - 0.6: Somewhat confident
    - 0.4: Uncertain
-   - 0.2: Very uncertain
+   - 0.2: Very uncertain`;
+    const userPrompt = `Context: Frank should engage naturally in conversations while being helpful and entertaining. Frank has personality - he's witty, sometimes sarcastic, but always friendly.
 
-YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.content.slice(0, 200)}. DO NOT USE CONTEXT TO DETERMINE RELEVANCE.`;
+Recent conversation:
+${context}
+
+Current message from @${message.author.username}: ${message.content.slice(0, 200)}
+
+Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.content.slice(0, 200)}. DO NOT USE CONTEXT TO DETERMINE RELEVANCE.`;
 
     const { object: output } = await generateObject({
-      model: openrouter("google/gemini-2.5-flash-lite"),
-      prompt,
+      model: openrouter("google/gemini-2.5-flash"),
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
       schema: z.object({
         talking: z.boolean(),
         relevancy: z.number().min(0).max(1),
@@ -211,13 +213,12 @@ YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.con
       temperature: 0.1,
     });
 
-    const responseTime = Date.now() - startTime;
     const score =
-      (output.talking ? 1 : 0.7) *
-      output.relevancy ** 1.33 *
-      output.confidence ** 1.33;
+      (output.talking ? 1 : 0.7) * output.relevancy * output.confidence;
 
-    return score;
+    console.log(score);
+
+    return score >= 0.8 ? 1 : score;
   } catch (error) {
     const errorTime = Date.now() - startTime;
     console.error(`Error in AI relevance check (${errorTime}ms):`, error);
