@@ -216,8 +216,6 @@ Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.auth
     const score =
       (output.talking ? 1 : 0.7) * output.relevancy * output.confidence;
 
-    console.log(score);
-
     return score >= 0.8 ? 1 : score;
   } catch (error) {
     const errorTime = Date.now() - startTime;
