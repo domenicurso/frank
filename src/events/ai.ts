@@ -1,4 +1,5 @@
 import { client } from "@/client";
+import { getGuildConfig } from "@/database";
 import { generateAIResponse } from "@/utils/ai/response";
 import { addTyposWithCorrection, TYPO_CONFIG } from "@/utils/ai/typo";
 import { CooldownManager } from "@/utils/cooldown";
@@ -45,12 +46,8 @@ interface TextChunk {
 type SpecialToken = DeleteToken | EditToken | PauseToken | ReactionToken;
 type MessageItem = SpecialToken | TextChunk;
 
-// Configuration
-const CONFIG = {
-  // Cooldown periods (in milliseconds)
-  USER_COOLDOWN: 3 * 1000, // Seconds between responses to same user
-  CHANNEL_COOLDOWN: 1 * 1000, // Seconds between any responses in channel
-
+// Default configuration (fallback values)
+const DEFAULT_CONFIG = {
   // Special tokens
   LONG_PAUSE_DURATION: 1.5 * 1000, // Duration for ::long_pause tokens
   DELETE_DELAY_RANGE: [0.8 * 1000, 2.2 * 1000], // Delay before ::delete_last_messages
@@ -236,34 +233,39 @@ async function calculateResponseProbability(
   if (isMentioned) return 1;
   if (isReplyToBot) return 1;
 
+  // Check relevance first
   const relevance = await isMessageRelevantToFrank(message);
-  if (relevance < CONFIG.MINIMUM_RELEVANCE) return 0;
+  if (relevance < DEFAULT_CONFIG.MINIMUM_RELEVANCE) return 0;
 
+  // Use pure relevance-based probability
   return relevance;
 }
 
 /**
  * Checks if user or channel is on cooldown
  */
-async function isOnCooldown(message: Message): Promise<boolean> {
+async function isOnCooldown(
+  message: Message,
+  guildConfig: any,
+): Promise<boolean> {
   const userId = message.author.id;
   const channelId = message.channel.id;
 
   // Check user cooldown
-  const userCooldown = await CooldownManager.checkUserCooldown(
+  const userCooldownCheck = await CooldownManager.checkUserCooldown(
     userId,
     "ai_response",
   );
-  if (userCooldown.onCooldown) {
+  if (userCooldownCheck.onCooldown) {
     return true;
   }
 
   // Check channel cooldown (less strict)
-  const channelCooldown = await CooldownManager.checkChannelCooldown(
+  const channelCooldownCheck = await CooldownManager.checkChannelCooldown(
     channelId,
     "ai_response",
   );
-  if (channelCooldown.onCooldown) {
+  if (channelCooldownCheck.onCooldown) {
     return true;
   }
 
@@ -273,22 +275,23 @@ async function isOnCooldown(message: Message): Promise<boolean> {
 /**
  * Sets cooldown for user and channel
  */
-async function setCooldown(message: Message) {
+async function setCooldown(message: Message, guildConfig: any) {
   const userId = message.author.id;
   const channelId = message.channel.id;
 
-  // Set user cooldown
+  console.log("Setting cooldown for user:", userId);
+  console.log("Setting cooldown for channel:", channelId);
+  console.log("Cooldown duration:", guildConfig.cooldownDuration * 1000);
+
   await CooldownManager.setUserCooldown(
     userId,
     "ai_response",
-    CONFIG.USER_COOLDOWN,
+    guildConfig.cooldownDuration * 1000,
   );
-
-  // Set channel cooldown
   await CooldownManager.setChannelCooldown(
     channelId,
     "ai_response",
-    CONFIG.CHANNEL_COOLDOWN,
+    1000, // 1 second between any responses in channel
   );
 }
 
@@ -303,7 +306,7 @@ function chunkResponse(text: string): string[] {
 
   for (const paragraph of paragraphs) {
     // If paragraph fits in one chunk, use it as-is
-    if (paragraph.length <= CONFIG.MAX_CHUNK_LENGTH) {
+    if (paragraph.length <= DEFAULT_CONFIG.MAX_CHUNK_LENGTH) {
       chunks.push(paragraph.trim());
       continue;
     }
@@ -318,7 +321,8 @@ function chunkResponse(text: string): string[] {
       // If adding this line would exceed limit, start new chunk
       if (
         currentChunk &&
-        currentChunk.length + trimmedLine.length + 1 > CONFIG.MAX_CHUNK_LENGTH
+        currentChunk.length + trimmedLine.length + 1 >
+          DEFAULT_CONFIG.MAX_CHUNK_LENGTH
       ) {
         chunks.push(currentChunk.trim());
         currentChunk = trimmedLine;
@@ -454,7 +458,7 @@ async function executeEditToken(token: EditToken, channelMessages: Message[]) {
  */
 async function executePauseToken() {
   await new Promise((resolve) =>
-    setTimeout(resolve, CONFIG.LONG_PAUSE_DURATION),
+    setTimeout(resolve, DEFAULT_CONFIG.LONG_PAUSE_DURATION),
   );
 }
 
@@ -486,10 +490,10 @@ function getRandomDelay(range: [number, number]): number {
  */
 function calculateTypingTime(text: string): number {
   const baseTime = Math.max(
-    CONFIG.MIN_TYPING_TIME,
+    DEFAULT_CONFIG.MIN_TYPING_TIME,
     Math.min(
-      CONFIG.MAX_TYPING_TIME,
-      text.length * (1000 / CONFIG.TYPING_SPEED),
+      DEFAULT_CONFIG.MAX_TYPING_TIME,
+      text.length * (1000 / DEFAULT_CONFIG.TYPING_SPEED),
     ),
   );
 
@@ -602,7 +606,7 @@ async function sendResponse(
     } else if (item.type === "delete") {
       // Give users time to read the content before deleting
       const deleteDelay = getRandomDelay(
-        CONFIG.DELETE_DELAY_RANGE as [number, number],
+        DEFAULT_CONFIG.DELETE_DELAY_RANGE as [number, number],
       );
       await new Promise((resolve) => setTimeout(resolve, deleteDelay));
 
@@ -610,7 +614,7 @@ async function sendResponse(
     } else if (item.type === "edit") {
       // Give users time to read the content before editing
       const editDelay = getRandomDelay(
-        CONFIG.EDIT_DELAY_RANGE as [number, number],
+        DEFAULT_CONFIG.EDIT_DELAY_RANGE as [number, number],
       );
       await new Promise((resolve) => setTimeout(resolve, editDelay));
 
@@ -622,6 +626,30 @@ async function sendResponse(
 }
 
 export async function execute(message: Message) {
+  // Skip DM messages - only process guild messages
+  if (!message.guild) return;
+
+  // Get guild configuration
+  const guildConfig = await getGuildConfig(message.guild.id);
+  if (!guildConfig) return;
+
+  // Check channel whitelist/blacklist
+  const whitelistedChannels = guildConfig.whitelistedChannels
+    ? (JSON.parse(guildConfig.whitelistedChannels) as string[])
+    : [];
+  const blacklistedChannels = guildConfig.blacklistedChannels
+    ? (JSON.parse(guildConfig.blacklistedChannels) as string[])
+    : [];
+
+  // Channel filtering: Only one of whitelist or blacklist can be active at a time
+  // If whitelist has channels, only respond in those channels
+  // If no whitelist, check blacklist and skip blacklisted channels
+  if (whitelistedChannels.length > 0) {
+    if (!whitelistedChannels.includes(message.channel.id)) return;
+  } else {
+    if (blacklistedChannels.includes(message.channel.id)) return;
+  }
+
   try {
     // Ignore messages sent by bots
     if (message.author.bot) return;
@@ -642,9 +670,10 @@ export async function execute(message: Message) {
     if (processingChannels.has(channel.id)) return;
 
     // Check if the bot is mentioned in various ways
-    const isMentioned = isBotMentioned(message);
+    const isMentioned = isBotMentioned(message) && guildConfig.allowedMentions;
     const isReplyToBot = await (async () => {
-      if (!message.reference?.messageId) return false;
+      if (!guildConfig.allowedReplies || !message.reference?.messageId)
+        return false;
       try {
         const repliedMessage = await message.channel.messages.fetch(
           message.reference.messageId,
@@ -656,7 +685,12 @@ export async function execute(message: Message) {
     })();
 
     // Check cooldowns (but allow mentions and replies to override)
-    if (!isMentioned && !isReplyToBot && (await isOnCooldown(message))) return;
+    if (
+      !isMentioned &&
+      !isReplyToBot &&
+      (await isOnCooldown(message, guildConfig))
+    )
+      return;
 
     // Calculate response probability AFTER updating activity
     const responseProbability = await calculateResponseProbability(
@@ -691,7 +725,7 @@ export async function execute(message: Message) {
       await sendResponse(message, response, startTime);
 
       // Set cooldowns
-      await setCooldown(message);
+      await setCooldown(message, guildConfig);
     } finally {
       // Always remove from processing sets
       processingMessages.delete(messageKey);

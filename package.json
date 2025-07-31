@@ -6,6 +6,8 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "deploy": "bun run src/deploy.ts",
+    "migrate": "bun run src/migrate.ts",
+    "migrate:railway": "bun run src/migrate-railway.ts",
     "test:memory": "bun run src/test-memory-summarizer.ts",
     "dev": "bun --hot src/index.ts"
   },

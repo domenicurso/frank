@@ -32,7 +32,7 @@
    ```env
    DISCORD_TOKEN =
    CLIENT_ID =
-   GUILD_ID =
+   TEST_GUILD_ID =
    OPENROUTER_API_KEY =
    ```
 

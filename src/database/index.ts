@@ -343,14 +343,11 @@ LockedChannel.init(
 export class GuildConfig extends Model {
   declare id: number;
   declare guildId: string;
-  declare modChannelId: string | null;
-  declare publicModChannelId: string | null;
-  declare logBans: boolean;
-  declare logKicks: boolean;
-  declare logTimeouts: boolean;
-  declare logWarnings: boolean;
-  declare logChannelLocks: boolean;
-  declare logMessageDeletes: boolean;
+  declare whitelistedChannels: string | null; // JSON array of channel IDs
+  declare blacklistedChannels: string | null; // JSON array of channel IDs
+  declare cooldownDuration: number; // in seconds
+  declare allowedMentions: boolean; // whether AI responds to mentions
+  declare allowedReplies: boolean; // whether AI responds to replies
   declare createdAt?: Date;
   declare updatedAt?: Date;
 }
@@ -370,43 +367,34 @@ GuildConfig.init(
   {
     id: {
       type: DataTypes.INTEGER,
-      primaryKey: true,
       autoIncrement: true,
+      primaryKey: true,
     },
     guildId: {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
     },
-    modChannelId: {
-      type: DataTypes.STRING,
+
+    whitelistedChannels: {
+      type: DataTypes.TEXT,
       allowNull: true,
     },
-    publicModChannelId: {
-      type: DataTypes.STRING,
+    blacklistedChannels: {
+      type: DataTypes.TEXT,
       allowNull: true,
     },
-    logBans: {
+
+    cooldownDuration: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+    },
+
+    allowedMentions: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,
     },
-    logKicks: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: true,
-    },
-    logTimeouts: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: true,
-    },
-    logWarnings: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: true,
-    },
-    logChannelLocks: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: true,
-    },
-    logMessageDeletes: {
+    allowedReplies: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,
     },
@@ -415,12 +403,6 @@ GuildConfig.init(
     sequelize,
     modelName: "GuildConfig",
     tableName: "guild_configs",
-    indexes: [
-      {
-        unique: true,
-        fields: ["guildId"],
-      },
-    ],
   },
 );
 
@@ -469,55 +451,61 @@ Memory.init(
 );
 
 // Utility functions for guild config
-export async function getGuildConfig(guildId: string) {
+export async function getGuildConfig(
+  guildId: string,
+): Promise<GuildConfig | null> {
   try {
     let config = await GuildConfig.findOne({
       where: { guildId },
     });
 
+    // Create default config if it doesn't exist
     if (!config) {
       config = await GuildConfig.create({
         guildId,
-        modChannelId: null,
-        publicModChannelId: null,
-        logBans: true,
-        logKicks: true,
-        logTimeouts: true,
-        logWarnings: true,
-        logChannelLocks: true,
-        logMessageDeletes: true,
+        whitelistedChannels: null,
+        blacklistedChannels: null,
+        cooldownDuration: 30,
+        allowedMentions: true,
+        allowedReplies: true,
       });
     }
 
     return config;
   } catch (error) {
-    console.error(chalk.red("[DB] Error fetching guild config:"), error);
+    console.error("Error getting guild config:", error);
     return null;
   }
 }
 
 export async function updateGuildConfig(
   guildId: string,
-  updates: Partial<{
-    modChannelId: string | null;
-    publicModChannelId: string | null;
-    logBans: boolean;
-    logKicks: boolean;
-    logTimeouts: boolean;
-    logWarnings: boolean;
-    logChannelLocks: boolean;
-    logMessageDeletes: boolean;
-  }>,
-) {
+  updates: Partial<
+    Omit<GuildConfig, "id" | "guildId" | "createdAt" | "updatedAt">
+  >,
+): Promise<boolean> {
   try {
-    const config = await getGuildConfig(guildId);
-    if (!config) return null;
+    const [affectedCount] = await GuildConfig.update(updates, {
+      where: { guildId },
+    });
 
-    await config.update(updates);
-    return config;
+    // If no rows were affected, create a new config
+    if (affectedCount === 0) {
+      await GuildConfig.create({
+        guildId,
+        whitelistedChannels: null,
+        blacklistedChannels: null,
+        cooldownDuration: 30,
+        allowedMentions: true,
+        allowedReplies: true,
+        ...updates,
+      });
+    }
+
+    return true;
   } catch (error) {
-    console.error(chalk.red("[DB] Error updating guild config:"), error);
-    return null;
+    console.error("Error updating guild config:", error);
+    return false;
   }
 }
 
