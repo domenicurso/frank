@@ -140,9 +140,37 @@ async function isMessageRelevantToFrank(message: Message): Promise<number> {
   try {
     // Get some context from recent messages for better relevance detection
     const recentMessages = await message.channel.messages.fetch({ limit: 5 });
+
+    // Build user map for mention resolution
+    const userMap = new Map<string, { username: string; displayName: string }>();
+    for (const msg of recentMessages.values()) {
+      userMap.set(msg.author.id, {
+        username: msg.author.username,
+        displayName: msg.author.displayName,
+      });
+
+      // Add mentioned users
+      for (const [userId, user] of msg.mentions.users) {
+        userMap.set(userId, {
+          username: user.username,
+          displayName: user.displayName,
+        });
+      }
+    }
+
     const context = Array.from(recentMessages.values())
       .reverse()
-      .map((msg) => `@${msg.author.username}: ${msg.content.slice(0, 100)}`)
+      .map((msg) => {
+        // Replace mentions with usernames
+        let processedContent = msg.content;
+        for (const [userId, user] of msg.mentions.users) {
+          processedContent = processedContent.replace(
+            new RegExp(`<@!?${userId}>`, "g"),
+            `@${user.username}`,
+          );
+        }
+        return `@${msg.author.username}: ${processedContent.slice(0, 100)}`;
+      })
       .join("\n");
 
     const systemPrompt = `You are Frank, a casual and friendly Discord chatbot, analyzing message relevance for response decisions.
@@ -191,9 +219,29 @@ Analyze the user's message and provide three scores.
 Recent conversation:
 ${context}
 
-Current message from @${message.author.username}: ${message.content.slice(0, 200)}
+Current message from @${message.author.username}: ${(() => {
+      // Replace mentions with usernames in current message
+      let processedContent = message.content;
+      for (const [userId, user] of message.mentions.users) {
+        processedContent = processedContent.replace(
+          new RegExp(`<@!?${userId}>`, "g"),
+          `@${user.username}`,
+        );
+      }
+      return processedContent.slice(0, 200);
+    })()}
 
-Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${message.content.slice(0, 200)}. DO NOT USE CONTEXT TO DETERMINE RELEVANCE.`;
+Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.author.username}: ${(() => {
+      // Replace mentions with usernames in current message
+      let processedContent = message.content;
+      for (const [userId, user] of message.mentions.users) {
+        processedContent = processedContent.replace(
+          new RegExp(`<@!?${userId}>`, "g"),
+          `@${user.username}`,
+        );
+      }
+      return processedContent.slice(0, 200);
+    })()} DO NOT USE CONTEXT TO DETERMINE RELEVANCE.`;
 
     const { object: output } = await generateObject({
       model: openrouter("google/gemini-2.5-flash"),
