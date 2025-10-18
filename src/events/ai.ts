@@ -244,7 +244,7 @@ Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.auth
     })()} DO NOT USE CONTEXT TO DETERMINE RELEVANCE.`;
 
     const { object: output } = await generateObject({
-      model: openrouter("google/gemini-2.5-flash"),
+      model: openrouter("google/gemini-2.0-flash-001"),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
