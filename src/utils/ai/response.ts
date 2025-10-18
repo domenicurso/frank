@@ -347,7 +347,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
     }
 
     const { text } = await generateText({
-      model: openrouter("google/gemini-2.0-flash-001"),
+      model: openrouter("google/gemini-2.5-flash"),
       messages: promptMessages,
       maxTokens: 400,
       tools,
