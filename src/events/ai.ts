@@ -139,7 +139,7 @@ async function isMessageRelevantToFrank(message: Message): Promise<number> {
 
   try {
     // Get some context from recent messages for better relevance detection
-    const recentMessages = await message.channel.messages.fetch({ limit: 5 });
+    const recentMessages = await message.channel.messages.fetch({ limit: 10 });
 
     // Build user map for mention resolution
     const userMap = new Map<string, { username: string; displayName: string }>();
