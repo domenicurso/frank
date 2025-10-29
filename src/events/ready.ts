@@ -64,6 +64,7 @@ const activityNames = [
   "Sulking in french",
   "Crying beautifully",
   "Crying over spilled milk",
+  "Breeding mysteriously",
   "Brooding mysteriously",
   "Brooding in black and white",
   "Staring into space",
