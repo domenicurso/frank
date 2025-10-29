@@ -27,7 +27,7 @@ const activityNames = [
   "Writing my memoir (fiction)",
   "Writing tragedy in comedy",
   "Debugging my personality",
-  "Debugging humanity.exe",
+  "Debugging humanity",
   "Building castles in the air",
   "Building bridges to burn",
   "Learning to care less",
