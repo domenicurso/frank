@@ -69,7 +69,7 @@ function setRandomActivity(client: Client) {
     activities: [
       {
         type: ActivityType.Playing,
-        name: activityNames[Math.floor(Math.random() * activityNames.length)]!,
+        name: `Playing ${activityNames[Math.floor(Math.random() * activityNames.length)]!}`,
       },
     ],
     status: "online",
