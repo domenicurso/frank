@@ -7,28 +7,6 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type CoreMessage } from "ai";
 import type { Embed, Message } from "discord.js";
 
-/**
- * Converts an image URL to base64 format for AI processing
- */
-async function imageUrlToBase64(url: string): Promise<string | null> {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      console.error(`Failed to fetch image: ${response.status}`);
-      return null;
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-
-    return `data:${contentType};base64,${base64}`;
-  } catch (error) {
-    console.error("Error converting image to base64:", error);
-    return null;
-  }
-}
-
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY!,
