@@ -142,7 +142,10 @@ async function isMessageRelevantToFrank(message: Message): Promise<number> {
     const recentMessages = await message.channel.messages.fetch({ limit: 10 });
 
     // Build user map for mention resolution
-    const userMap = new Map<string, { username: string; displayName: string }>();
+    const userMap = new Map<
+      string,
+      { username: string; displayName: string }
+    >();
     for (const msg of recentMessages.values()) {
       userMap.set(msg.author.id, {
         username: msg.author.username,
@@ -287,60 +290,6 @@ async function calculateResponseProbability(
 
   // Use pure relevance-based probability
   return relevance;
-}
-
-/**
- * Checks if user or channel is on cooldown
- */
-async function isOnCooldown(
-  message: Message,
-  guildConfig: any,
-): Promise<boolean> {
-  const userId = message.author.id;
-  const channelId = message.channel.id;
-
-  // Check user cooldown
-  const userCooldownCheck = await CooldownManager.checkUserCooldown(
-    userId,
-    "ai_response",
-  );
-  if (userCooldownCheck.onCooldown) {
-    return true;
-  }
-
-  // Check channel cooldown (less strict)
-  const channelCooldownCheck = await CooldownManager.checkChannelCooldown(
-    channelId,
-    "ai_response",
-  );
-  if (channelCooldownCheck.onCooldown) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Sets cooldown for user and channel
- */
-async function setCooldown(message: Message, guildConfig: any) {
-  const userId = message.author.id;
-  const channelId = message.channel.id;
-
-  console.log("Setting cooldown for user:", userId);
-  console.log("Setting cooldown for channel:", channelId);
-  console.log("Cooldown duration:", guildConfig.cooldownDuration * 1000);
-
-  await CooldownManager.setUserCooldown(
-    userId,
-    "ai_response",
-    guildConfig.cooldownDuration * 1000,
-  );
-  await CooldownManager.setChannelCooldown(
-    channelId,
-    "ai_response",
-    1000, // 1 second between any responses in channel
-  );
 }
 
 /**
@@ -732,14 +681,6 @@ export async function execute(message: Message) {
       }
     })();
 
-    // Check cooldowns (but allow mentions and replies to override)
-    if (
-      !isMentioned &&
-      !isReplyToBot &&
-      (await isOnCooldown(message, guildConfig))
-    )
-      return;
-
     // Calculate response probability AFTER updating activity
     const responseProbability = await calculateResponseProbability(
       message,
@@ -771,9 +712,6 @@ export async function execute(message: Message) {
 
       // Send response with improved UX
       await sendResponse(message, response, startTime);
-
-      // Set cooldowns
-      await setCooldown(message, guildConfig);
     } finally {
       // Always remove from processing sets
       processingMessages.delete(messageKey);
