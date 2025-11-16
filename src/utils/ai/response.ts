@@ -208,19 +208,10 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
       if (contentType.startsWith("image/")) {
         try {
-          const base64Image = await imageUrlToBase64(attachment.url);
-          if (base64Image) {
-            messageContent.push({
-              type: "image",
-              image: base64Image,
-            });
-          } else {
-            // Fallback to text description if image conversion fails
-            messageContent.push({
-              type: "text",
-              text: `[Image: ${attachment.name}]`,
-            });
-          }
+          messageContent.push({
+            type: "image",
+            image: attachment.url,
+          });
         } catch (error) {
           console.error("Error processing image attachment:", error);
           messageContent.push({
