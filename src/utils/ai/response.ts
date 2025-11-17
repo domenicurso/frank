@@ -6,11 +6,116 @@ import { createAITools } from "@/utils/ai/tools";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateText, type CoreMessage } from "ai";
 import type { Embed, Message } from "discord.js";
+import sharp from "sharp";
 
 // Configure OpenRouter with API key
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY!,
 });
+
+/**
+ * Image compression settings
+ */
+const IMAGE_CONFIG = {
+  maxWidth: 1024,
+  maxHeight: 1024,
+  quality: 80,
+  maxSizeKB: 500, // Target max size after compression
+  maxImagesPerMessage: 3, // Limit images per message
+  maxConcurrentProcessing: 2, // Limit concurrent image processing
+} as const;
+
+/**
+ * Semaphore to limit concurrent image processing
+ */
+let currentImageProcessing = 0;
+
+/**
+ * Get current memory usage in MB
+ */
+function getMemoryUsage(): {
+  rss: number;
+  heapUsed: number;
+  heapTotal: number;
+} {
+  const memUsage = process.memoryUsage();
+  return {
+    rss: Math.round(memUsage.rss / 1024 / 1024),
+    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+  };
+}
+
+/**
+ * Converts an image URL to compressed base64 format
+ */
+async function imageUrlToBase64(url: string): Promise<string> {
+  // Wait for available processing slot
+  while (currentImageProcessing >= IMAGE_CONFIG.maxConcurrentProcessing) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  currentImageProcessing++;
+
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(
+        `Failed to fetch image: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const contentType = response.headers.get("content-type") || "image/png";
+
+    // Check if content type is actually an image
+    if (!contentType.startsWith("image/")) {
+      throw new Error(`Invalid content type: ${contentType}. Expected image.`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const originalBuffer = Buffer.from(arrayBuffer);
+
+    // Check reasonable size limits for original image (e.g., 50MB)
+    if (originalBuffer.length > 50 * 1024 * 1024) {
+      throw new Error(
+        `Image too large: ${Math.round(originalBuffer.length / (1024 * 1024))}MB. Maximum 50MB allowed.`,
+      );
+    }
+
+    // Compress and resize the image
+    const compressedBuffer = await sharp(originalBuffer)
+      .resize(IMAGE_CONFIG.maxWidth, IMAGE_CONFIG.maxHeight, {
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({
+        quality: IMAGE_CONFIG.quality,
+        progressive: true,
+        mozjpeg: true,
+      })
+      .toBuffer();
+
+    const base64 = compressedBuffer.toString("base64");
+    const dataUri = `data:image/jpeg;base64,${base64}`;
+
+    // Force garbage collection if available (development/testing)
+    if (global.gc && process.env.NODE_ENV !== "production") {
+      global.gc();
+    }
+
+    return dataUri;
+  } catch (error) {
+    console.error(
+      `[Image Processing] Failed to convert image to base64:`,
+      error,
+    );
+    throw error;
+  } finally {
+    // Always decrement the counter
+    currentImageProcessing--;
+  }
+}
 
 /**
  * Generates AI response using conversation context and user mentions
@@ -120,7 +225,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
     // Build message content array with proper attachment handling
     const messageContent: Array<
-      { type: "text"; text: string } | { type: "image"; image: URL | string }
+      { type: "text"; text: string } | { type: "image"; image: string }
     > = [];
 
     // Add reply context if exists
@@ -180,21 +285,37 @@ export async function generateAIResponse(message: Message): Promise<string> {
       });
     }
 
-    // Handle attachments with proper types
+    // Handle attachments with proper types (limit total images)
+    let imageCount = 0;
     for (const attachment of msg.attachments.values()) {
       const contentType = attachment.contentType || "";
 
       if (contentType.startsWith("image/")) {
-        try {
-          messageContent.push({
-            type: "image",
-            image: new URL(attachment.url),
-          });
-        } catch (error) {
-          console.error("Error processing image attachment:", error);
+        // Skip if we've hit the image limit
+        if (imageCount >= IMAGE_CONFIG.maxImagesPerMessage) {
           messageContent.push({
             type: "text",
-            text: `[Image: ${attachment.name}]`,
+            text: `[Image: ${attachment.name} - Skipped due to image limit]`,
+          });
+          continue;
+        }
+
+        imageCount++;
+        try {
+          const base64Image = await imageUrlToBase64(attachment.url);
+          messageContent.push({
+            type: "image",
+            image: base64Image,
+          });
+        } catch (error) {
+          console.error(
+            `[Attachment Processing] Failed to process image attachment "${attachment.name}":`,
+            error,
+          );
+          // Add more descriptive fallback text
+          messageContent.push({
+            type: "text",
+            text: `[Image: ${attachment.name} - Processing failed: ${error instanceof Error ? error.message : "Unknown error"}]`,
           });
         }
       } else {
