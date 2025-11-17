@@ -1,6 +1,12 @@
 import { client } from "@/client";
-import { initializeDatabase, setDiscordClient } from "@/database/index";
+import {
+  initializeDatabase,
+  setDiscordClient,
+  stopBackgroundTasks,
+} from "@/database/index";
 import { trackCommandUsage } from "@/database/userStats";
+import { stopActivityUpdates } from "@/events/ready";
+import { stopProcessingCleanup } from "@/events/ai";
 
 import chalk from "chalk";
 import { Events, MessageFlags } from "discord.js";
@@ -214,5 +220,56 @@ setDiscordClient(client);
 console.log(chalk.green("Discord client configured for database operations!"));
 
 console.log(chalk.cyan.bold(`\nInitialized in ${Date.now() - startTime}ms!\n`));
+
+// Graceful shutdown handling
+async function gracefulShutdown(signal: string) {
+  console.log(
+    chalk.yellow(`\n[${signal}] Received shutdown signal. Cleaning up...`),
+  );
+
+  try {
+    // Stop all background tasks and intervals
+    console.log(chalk.blue("Stopping background maintenance tasks..."));
+    stopBackgroundTasks();
+
+    console.log(chalk.blue("Stopping activity updates..."));
+    stopActivityUpdates();
+
+    console.log(chalk.blue("Stopping AI processing cleanup..."));
+    stopProcessingCleanup();
+
+    // Gracefully close Discord client
+    console.log(chalk.blue("Destroying Discord client..."));
+    client.destroy();
+
+    console.log(chalk.green("Cleanup completed successfully"));
+    process.exit(0);
+  } catch (error) {
+    console.error(chalk.red("Error during cleanup:"), error);
+    process.exit(1);
+  }
+}
+
+// Handle different shutdown signals
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGUSR1", () => gracefulShutdown("SIGUSR1"));
+process.on("SIGUSR2", () => gracefulShutdown("SIGUSR2"));
+
+// Handle uncaught exceptions and promise rejections
+process.on("uncaughtException", (error) => {
+  console.error(chalk.red("Uncaught Exception:"), error);
+  gracefulShutdown("uncaughtException");
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error(
+    chalk.red("Unhandled Rejection at:"),
+    promise,
+    chalk.red("reason:"),
+    reason,
+  );
+  gracefulShutdown("unhandledRejection");
+});
 
 client.login(process.env.DISCORD_TOKEN!);

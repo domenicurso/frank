@@ -19,17 +19,32 @@ export const sequelize = isDevelopment
       dialect: "sqlite",
       storage: "database.sqlite",
       logging: false,
+      pool: {
+        max: 5,
+        min: 0,
+        acquire: 30000,
+        idle: 10000,
+      },
     })
   : new Sequelize(process.env.DATABASE_URL!, {
       dialect: "postgres",
       protocol: "postgres",
       logging: false,
+      pool: {
+        max: 10, // Maximum number of connections in pool
+        min: 2, // Minimum number of connections in pool
+        acquire: 30000, // Maximum time to try getting connection
+        idle: 10000, // Maximum time a connection can be idle
+        evict: 1000, // Time between eviction runs
+      },
       dialectOptions: {
         ssl: {
           require: true,
-          // depending on your host you may need:
           rejectUnauthorized: false,
         },
+      },
+      retry: {
+        max: 3, // Maximum retry attempts
       },
     });
 
@@ -531,6 +546,9 @@ export async function initializeDatabase() {
 
     // Clean up expired locked channels on startup
     await cleanupExpiredLockedChannels();
+
+    // Start background maintenance tasks
+    startBackgroundTasks();
   } catch (error) {
     console.error(chalk.red("[DB] Unable to connect to the database:"), error);
     throw error;
@@ -984,18 +1002,85 @@ export async function getGuildMemories(guildId: string) {
   }
 }
 
-// Periodic cleanup (run every 5 minutes)
-setInterval(cleanupExpiredCooldowns, 5 * 60 * 1000);
+// Store interval IDs for cleanup
+let cleanupIntervals: {
+  cooldownCleanup?: NodeJS.Timeout;
+  scheduleCleanup?: NodeJS.Timeout;
+  messageProcessor?: NodeJS.Timeout;
+  channelUnlock?: NodeJS.Timeout;
+  initialTimeout?: NodeJS.Timeout;
+} = {};
 
-// Cleanup old scheduled messages daily
-setInterval(cleanupOldScheduledMessages, 24 * 60 * 60 * 1000);
+/**
+ * Clear all existing intervals to prevent accumulation
+ */
+function clearExistingIntervals() {
+  if (cleanupIntervals.cooldownCleanup) {
+    clearInterval(cleanupIntervals.cooldownCleanup);
+  }
+  if (cleanupIntervals.scheduleCleanup) {
+    clearInterval(cleanupIntervals.scheduleCleanup);
+  }
+  if (cleanupIntervals.messageProcessor) {
+    clearInterval(cleanupIntervals.messageProcessor);
+  }
+  if (cleanupIntervals.channelUnlock) {
+    clearInterval(cleanupIntervals.channelUnlock);
+  }
+  if (cleanupIntervals.initialTimeout) {
+    clearTimeout(cleanupIntervals.initialTimeout);
+  }
+  cleanupIntervals = {};
+}
 
-setTimeout(
-  function () {
-    setInterval(processScheduledMessages, 60 * 1000);
-    setInterval(cleanupExpiredLockedChannels, 60 * 1000);
-    processScheduledMessages();
-    cleanupExpiredLockedChannels();
-  },
-  (60 - new Date().getSeconds()) * 1000,
-);
+/**
+ * Start background tasks with proper cleanup
+ */
+function startBackgroundTasks() {
+  // Clear any existing intervals first
+  clearExistingIntervals();
+
+  console.log(chalk.blue("[DB] Starting background maintenance tasks..."));
+
+  // Periodic cleanup (run every 5 minutes)
+  cleanupIntervals.cooldownCleanup = setInterval(
+    cleanupExpiredCooldowns,
+    5 * 60 * 1000,
+  );
+
+  // Cleanup old scheduled messages daily
+  cleanupIntervals.scheduleCleanup = setInterval(
+    cleanupOldScheduledMessages,
+    24 * 60 * 60 * 1000,
+  );
+
+  // Start scheduled message processing and channel unlocking with proper timing
+  cleanupIntervals.initialTimeout = setTimeout(
+    function () {
+      cleanupIntervals.messageProcessor = setInterval(
+        processScheduledMessages,
+        60 * 1000,
+      );
+      cleanupIntervals.channelUnlock = setInterval(
+        cleanupExpiredLockedChannels,
+        60 * 1000,
+      );
+
+      // Run initial cleanup
+      processScheduledMessages();
+      cleanupExpiredLockedChannels();
+    },
+    (60 - new Date().getSeconds()) * 1000,
+  );
+}
+
+/**
+ * Stop all background tasks
+ */
+export function stopBackgroundTasks() {
+  console.log(chalk.yellow("[DB] Stopping background maintenance tasks..."));
+  clearExistingIntervals();
+}
+
+// Export the start function as well
+export { startBackgroundTasks };

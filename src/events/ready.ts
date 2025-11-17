@@ -123,6 +123,9 @@ export const name = "Ready";
 export const type = Events.ClientReady;
 export const once = true;
 
+// Store interval ID for cleanup
+let activityInterval: NodeJS.Timeout | null = null;
+
 function setRandomActivity(client: Client) {
   client.user?.setPresence({
     activities: [
@@ -135,12 +138,26 @@ function setRandomActivity(client: Client) {
   });
 }
 
+/**
+ * Stop the activity interval to prevent memory leaks
+ */
+export function stopActivityUpdates() {
+  if (activityInterval) {
+    clearInterval(activityInterval);
+    activityInterval = null;
+    console.log(chalk.yellow("[Ready] Activity updates stopped"));
+  }
+}
+
 export async function execute(client: Client) {
+  // Clear any existing interval first
+  stopActivityUpdates();
+
   // set initial status
   setRandomActivity(client);
 
   // change activity every 2 minutes
-  setInterval(
+  activityInterval = setInterval(
     () => {
       setRandomActivity(client);
     },

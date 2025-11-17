@@ -2,7 +2,6 @@ import { client } from "@/client";
 import { getGuildConfig } from "@/database";
 import { generateAIResponse } from "@/utils/ai/response";
 import { addTyposWithCorrection, TYPO_CONFIG } from "@/utils/ai/typo";
-import { CooldownManager } from "@/utils/cooldown";
 import percent from "@/utils/percent";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateObject } from "ai";
@@ -14,8 +13,67 @@ export const name = "AIController";
 export const type = Events.MessageCreate;
 
 // Rate limiting and cooldown management
-const processingMessages = new Set<string>();
-const processingChannels = new Set<string>(); // Track channels currently processing responses
+const processingMessages = new Map<string, number>(); // messageKey -> timestamp
+const processingChannels = new Map<string, number>(); // channelId -> timestamp
+
+// Cleanup interval for processing maps
+let processingCleanupInterval: NodeJS.Timeout | null = null;
+
+/**
+ * Clean up old processing entries that might be stuck
+ */
+function cleanupProcessingMaps() {
+  const now = Date.now();
+  const maxAge = 5 * 60 * 1000; // 5 minutes
+
+  // Clean up old message processing entries
+  for (const [key, timestamp] of processingMessages.entries()) {
+    if (now - timestamp > maxAge) {
+      processingMessages.delete(key);
+    }
+  }
+
+  // Clean up old channel processing entries
+  for (const [channelId, timestamp] of processingChannels.entries()) {
+    if (now - timestamp > maxAge) {
+      processingChannels.delete(channelId);
+    }
+  }
+
+  // Log cleanup stats if any entries were removed
+  const messageCount = processingMessages.size;
+  const channelCount = processingChannels.size;
+  if (messageCount > 0 || channelCount > 0) {
+    console.log(
+      `[AI] Processing maps: ${messageCount} messages, ${channelCount} channels`,
+    );
+  }
+}
+
+/**
+ * Start processing cleanup interval
+ */
+function startProcessingCleanup() {
+  if (processingCleanupInterval) {
+    clearInterval(processingCleanupInterval);
+  }
+  processingCleanupInterval = setInterval(cleanupProcessingMaps, 2 * 60 * 1000); // Every 2 minutes
+}
+
+/**
+ * Stop processing cleanup interval
+ */
+export function stopProcessingCleanup() {
+  if (processingCleanupInterval) {
+    clearInterval(processingCleanupInterval);
+    processingCleanupInterval = null;
+  }
+  processingMessages.clear();
+  processingChannels.clear();
+}
+
+// Start cleanup on module load
+startProcessingCleanup();
 
 // Special token interfaces
 interface DeleteToken {
@@ -690,9 +748,10 @@ export async function execute(message: Message) {
 
     if (!percent(responseProbability * 100)) return;
 
-    // Mark as processing
-    processingMessages.add(messageKey);
-    processingChannels.add(channel.id);
+    // Mark as processing with timestamp
+    const now = Date.now();
+    processingMessages.set(messageKey, now);
+    processingChannels.set(channel.id, now);
 
     try {
       await channel.sendTyping();
@@ -713,7 +772,7 @@ export async function execute(message: Message) {
       // Send response with improved UX
       await sendResponse(message, response, startTime);
     } finally {
-      // Always remove from processing sets
+      // Always remove from processing maps
       processingMessages.delete(messageKey);
       processingChannels.delete(channel.id);
     }
