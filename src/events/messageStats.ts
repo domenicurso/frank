@@ -11,5 +11,5 @@ export async function execute(message: Message) {
   }
 
   // Track the message in user stats
-  await trackMessageSent(message.author.id, message.guild.id);
+  // await trackMessageSent(message.author.id, message.guild.id);
 }
