@@ -302,7 +302,7 @@ Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.auth
         );
       }
       return processedContent.slice(0, 200);
-    })()} DO NOT USE CONTEXT TO DETERMINE RELEVANCE.`;
+    })()}`;
 
     const { object: output } = await generateObject({
       model: openrouter("google/gemini-2.5-flash"),
@@ -311,23 +311,29 @@ Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.auth
         { role: "user", content: userPrompt },
       ],
       schema: z.object({
-        talking: z.boolean(),
-        relevancy: z.number().min(0).max(1),
-        confidence: z.number().min(0).max(1),
+        talking_to_frank: z.boolean(),
+        relevancy_in_relation_to_frank: z.number().min(0).max(1),
+        confidence_in_scoring: z.number().min(0).max(1),
       }),
       maxTokens: 300,
       temperature: 0.1,
     });
 
+    console.log(output);
+
     const score =
-      (output.talking ? 1 : 0.7) * output.relevancy * output.confidence;
+      (output.talking_to_frank ? 1 : 0.7) *
+      output.relevancy_in_relation_to_frank *
+      output.confidence_in_scoring;
+
+    console.log(score);
 
     return score >= 0.7 ? 1 : score;
   } catch (error) {
     const errorTime = Date.now() - startTime;
     console.error(`Error in AI relevance check (${errorTime}ms):`, error);
 
-    return 0.5; // Default fallback score
+    return 0;
   }
 }
 
