@@ -39,15 +39,6 @@ function cleanupProcessingMaps() {
       processingChannels.delete(channelId);
     }
   }
-
-  // Log cleanup stats if any entries were removed
-  const messageCount = processingMessages.size;
-  const channelCount = processingChannels.size;
-  if (messageCount > 0 || channelCount > 0) {
-    console.log(
-      `[AI] Processing maps: ${messageCount} messages, ${channelCount} channels`,
-    );
-  }
 }
 
 /**
@@ -319,14 +310,10 @@ Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.auth
       temperature: 0.1,
     });
 
-    console.log(output);
-
     const score =
       (output.talking_to_frank ? 1 : 0.7) *
       output.relevancy_in_relation_to_frank *
       output.confidence_in_scoring;
-
-    console.log(score);
 
     return score >= 0.7 ? 1 : score;
   } catch (error) {
@@ -509,8 +496,6 @@ async function executeEditToken(token: EditToken, channelMessages: Message[]) {
     } catch (error) {
       console.error("Failed to edit message:", error);
     }
-  } else {
-    console.log("No valid message to edit at index:", messageIndex);
   }
 }
 
