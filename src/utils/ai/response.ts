@@ -31,22 +31,6 @@ const IMAGE_CONFIG = {
 let currentImageProcessing = 0;
 
 /**
- * Get current memory usage in MB
- */
-function getMemoryUsage(): {
-  rss: number;
-  heapUsed: number;
-  heapTotal: number;
-} {
-  const memUsage = process.memoryUsage();
-  return {
-    rss: Math.round(memUsage.rss / 1024 / 1024),
-    heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
-    heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-  };
-}
-
-/**
  * Converts an image URL to compressed base64 format
  */
 async function imageUrlToBase64(url: string): Promise<string> {
