@@ -17,7 +17,7 @@ const startTime = Date.now();
 
 const now = new Date()
   .toLocaleString("en-US", {
-    month: "2-digit",
+    month: "short",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
