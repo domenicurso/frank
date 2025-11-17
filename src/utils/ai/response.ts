@@ -17,12 +17,14 @@ const openrouter = createOpenRouter({
  * Image compression settings
  */
 const IMAGE_CONFIG = {
-  maxWidth: 1024,
-  maxHeight: 1024,
-  quality: 80,
-  maxSizeKB: 500, // Target max size after compression
-  maxImagesPerMessage: 3, // Limit images per message
-  maxConcurrentProcessing: 2, // Limit concurrent image processing
+  maxWidth: 512, // Reduced for memory savings
+  maxHeight: 512,
+  quality: 60, // Lower quality for memory savings
+  maxSizeKB: 200, // Smaller target size
+  maxImagesPerMessage: 2, // Fewer images per message
+  maxConcurrentProcessing: 1, // Only one at a time
+  memoryLimitMB: 150, // Skip images if heap usage exceeds this
+  maxImageSizeKB: 500, // Skip images larger than this after compression
 } as const;
 
 /**
@@ -67,18 +69,26 @@ async function imageUrlToBase64(url: string): Promise<string> {
       );
     }
 
-    // Compress and resize the image
-    const compressedBuffer = await sharp(originalBuffer)
-      .resize(IMAGE_CONFIG.maxWidth, IMAGE_CONFIG.maxHeight, {
-        fit: "inside",
-        withoutEnlargement: true,
-      })
-      .jpeg({
-        quality: IMAGE_CONFIG.quality,
-        progressive: true,
-        mozjpeg: true,
-      })
-      .toBuffer();
+    // Compress and resize the image with aggressive settings
+    let compressedBuffer: Buffer;
+    try {
+      compressedBuffer = await sharp(originalBuffer, {
+        limitInputPixels: 16777216,
+      }) // 4096x4096 limit
+        .resize(IMAGE_CONFIG.maxWidth, IMAGE_CONFIG.maxHeight, {
+          fit: "inside",
+          withoutEnlargement: true,
+        })
+        .jpeg({
+          quality: IMAGE_CONFIG.quality,
+          progressive: false, // Disable progressive for smaller memory footprint
+          mozjpeg: false, // Disable mozjpeg for faster processing
+        })
+        .toBuffer();
+    } finally {
+      // Force disposal of Sharp instance
+      if (global.gc) global.gc();
+    }
 
     const base64 = compressedBuffer.toString("base64");
     const dataUri = `data:image/jpeg;base64,${base64}`;
