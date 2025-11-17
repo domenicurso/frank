@@ -120,7 +120,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
 
     // Build message content array with proper attachment handling
     const messageContent: Array<
-      { type: "text"; text: string } | { type: "image"; image: string }
+      { type: "text"; text: string } | { type: "image"; image: URL | string }
     > = [];
 
     // Add reply context if exists
@@ -188,7 +188,7 @@ export async function generateAIResponse(message: Message): Promise<string> {
         try {
           messageContent.push({
             type: "image",
-            image: attachment.url,
+            image: new URL(attachment.url),
           });
         } catch (error) {
           console.error("Error processing image attachment:", error);
