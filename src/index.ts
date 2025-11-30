@@ -176,11 +176,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       `${chalk.green(new Date().toLocaleString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }))} ${chalk.blue.bold(interaction.user.username)} executed ${chalk.yellow.bold(command.name)} command`,
     );
     await command.execute(interaction);
-
-    // Track command usage for user stats
-    if (interaction.guild) {
-      await trackCommandUsage(interaction.user.id, interaction.guild.id);
-    }
   } catch (error) {
     console.error(error);
     if (interaction.replied || interaction.deferred) {
