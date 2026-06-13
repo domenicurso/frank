@@ -430,8 +430,10 @@ export async function generateAIResponse(message: Message): Promise<string> {
       throw new Error("Insufficient message context for AI generation");
     }
 
+    // console.log(promptMessages)
+
     const { text } = await generateText({
-      model: openrouter("google/gemini-2.5-flash"),
+      model: openrouter("x-ai/grok-4.3"),
       messages: promptMessages,
       maxTokens: 400,
       tools,

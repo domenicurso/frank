@@ -1,3 +1,4 @@
+import { getCurrentActivityName } from "@/activity";
 import { getCorePrompt } from "@/prompts/core";
 import { getDMPrompt } from "@/prompts/dm";
 import { getExamplesPrompt } from "@/prompts/examples";
@@ -19,6 +20,7 @@ export function buildSystemPrompt(
     getSchedulingPrompt(),
     getMemoryPrompt(memoryContext),
     getDMPrompt(),
+    `Your current activity is "${getCurrentActivityName()}". The activity line is flavor text—use it to set tone, not to refuse tasks or derail answers.`,
   ]
     .filter(Boolean)
     .join("\n\n")

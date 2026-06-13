@@ -315,6 +315,8 @@ Score the current message. YOU ARE ONLY SCORING THE MESSAGE FROM @${message.auth
       output.relevancy_in_relation_to_frank *
       output.confidence_in_scoring;
 
+    console.log(`Relevance check: talking=${output.talking_to_frank}, relevancy=${output.relevancy_in_relation_to_frank}, confidence=${output.confidence_in_scoring}, score=${score}`);
+
     return score >= 0.7 ? 1 : score;
   } catch (error) {
     const errorTime = Date.now() - startTime;
