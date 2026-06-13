@@ -1,4 +1,4 @@
-import { processScheduledMessages } from "@/database/scheduled";
+import { initializeFrankModels } from "@/frank/store";
 import chalk from "chalk";
 import {
   Client,
@@ -20,10 +20,13 @@ export const sequelize = isDevelopment
       storage: "database.sqlite",
       logging: false,
       pool: {
-        max: 5,
-        min: 0,
+        max: 1,
+        min: 1,
         acquire: 30000,
         idle: 10000,
+      },
+      retry: {
+        max: 5,
       },
     })
   : new Sequelize(process.env.DATABASE_URL!, {
@@ -89,142 +92,6 @@ Cooldown.init(
     indexes: [
       {
         fields: ["expiresAt"], // For cleanup queries
-      },
-    ],
-  },
-);
-
-// Scheduled Messages Model
-export class ScheduledMessage extends Model {
-  declare id: number;
-  declare userId: string;
-  declare guildId: string;
-  declare channelId: string;
-  declare targetUserIds: string; // JSON array of user IDs
-  declare scheduledTime: Date;
-  declare message: string;
-  declare sent: boolean;
-  declare recurringInterval?: number; // Interval in minutes, null for non-recurring
-  declare maxOccurrences?: number; // Max number of times to send, null for infinite
-  declare occurrenceCount: number; // How many times it has been sent
-  declare createdAt: Date;
-  declare updatedAt: Date;
-}
-
-ScheduledMessage.init(
-  {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true,
-    },
-    userId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    guildId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    channelId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    targetUserIds: {
-      type: DataTypes.TEXT,
-      allowNull: false,
-    },
-    scheduledTime: {
-      type: DataTypes.DATE,
-      allowNull: false,
-    },
-    message: {
-      type: DataTypes.TEXT,
-      allowNull: false,
-    },
-    sent: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false,
-    },
-    recurringInterval: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      comment: "Interval in minutes for recurring messages",
-    },
-    maxOccurrences: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      comment: "Maximum number of occurrences, null for infinite",
-    },
-    occurrenceCount: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0,
-      comment: "Number of times this message has been sent",
-    },
-  },
-  {
-    sequelize,
-    modelName: "ScheduledMessage",
-    tableName: "scheduled_messages",
-    indexes: [
-      {
-        fields: ["scheduledTime", "sent"],
-      },
-      {
-        fields: ["guildId"],
-      },
-    ],
-  },
-);
-
-// User Stats Model (optional, for future use)
-export class UserStats extends Model {
-  declare id: number;
-  declare userId: string;
-  declare guildId: string;
-  declare commandsUsed: number;
-  declare messagesCount: number;
-  declare lastActive: Date;
-  declare createdAt: Date;
-  declare updatedAt: Date;
-}
-
-UserStats.init(
-  {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true,
-    },
-    userId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    guildId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    commandsUsed: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0,
-    },
-    messagesCount: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0,
-    },
-    lastActive: {
-      type: DataTypes.DATE,
-      defaultValue: DataTypes.NOW,
-    },
-  },
-  {
-    sequelize,
-    modelName: "UserStats",
-    tableName: "user_stats",
-    indexes: [
-      {
-        unique: true,
-        fields: ["userId", "guildId"],
       },
     ],
   },
@@ -363,17 +230,11 @@ export class GuildConfig extends Model {
   declare cooldownDuration: number; // in seconds
   declare allowedMentions: boolean; // whether AI responds to mentions
   declare allowedReplies: boolean; // whether AI responds to replies
-  declare createdAt?: Date;
-  declare updatedAt?: Date;
-}
-
-// Memory Model for bot long-term memory
-export class Memory extends Model {
-  declare id: number;
-  declare userId: string;
-  declare guildId: string;
-  declare key: string;
-  declare content: string;
+  declare attentionMode: string;
+  declare opportunismLevel: number;
+  declare reactionsEnabled: boolean;
+  declare burstResponsesEnabled: boolean;
+  declare maxBurstMessages: number;
   declare createdAt?: Date;
   declare updatedAt?: Date;
 }
@@ -413,55 +274,31 @@ GuildConfig.init(
       type: DataTypes.BOOLEAN,
       defaultValue: true,
     },
+    attentionMode: {
+      type: DataTypes.STRING,
+      defaultValue: "conversation-aware",
+    },
+    opportunismLevel: {
+      type: DataTypes.INTEGER,
+      defaultValue: 15,
+    },
+    reactionsEnabled: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+    },
+    burstResponsesEnabled: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+    },
+    maxBurstMessages: {
+      type: DataTypes.INTEGER,
+      defaultValue: 5,
+    },
   },
   {
     sequelize,
     modelName: "GuildConfig",
     tableName: "guild_configs",
-  },
-);
-
-// Initialize Memory model
-Memory.init(
-  {
-    id: {
-      type: DataTypes.INTEGER,
-      primaryKey: true,
-      autoIncrement: true,
-    },
-    userId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    guildId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    key: {
-      type: DataTypes.STRING,
-      allowNull: false,
-    },
-    content: {
-      type: DataTypes.TEXT,
-      allowNull: false,
-    },
-  },
-  {
-    sequelize,
-    modelName: "Memory",
-    tableName: "memories",
-    indexes: [
-      {
-        fields: ["userId", "guildId"],
-      },
-      {
-        fields: ["key"],
-      },
-      {
-        unique: true,
-        fields: ["guildId", "key"],
-      },
-    ],
   },
 );
 
@@ -483,6 +320,11 @@ export async function getGuildConfig(
         cooldownDuration: 0,
         allowedMentions: true,
         allowedReplies: true,
+        attentionMode: "conversation-aware",
+        opportunismLevel: 15,
+        reactionsEnabled: true,
+        burstResponsesEnabled: true,
+        maxBurstMessages: 5,
       });
     }
 
@@ -513,6 +355,11 @@ export async function updateGuildConfig(
         cooldownDuration: 30,
         allowedMentions: true,
         allowedReplies: true,
+        attentionMode: "conversation-aware",
+        opportunismLevel: 15,
+        reactionsEnabled: true,
+        burstResponsesEnabled: true,
+        maxBurstMessages: 5,
         ...updates,
       });
     }
@@ -527,6 +374,7 @@ export async function updateGuildConfig(
 // Initialize database
 export async function initializeDatabase() {
   try {
+    initializeFrankModels();
     await sequelize.authenticate();
     const isDevelopment =
       process.env.NODE_ENV === "development" || !process.env.DATABASE_URL;
@@ -537,8 +385,13 @@ export async function initializeDatabase() {
       ),
     );
 
-    // Simple sync - create tables if they don't exist, don't alter existing ones
+    if (isDevelopment) {
+      await applyDevelopmentSqlitePragmas();
+    }
+
+    // Simple sync - create tables if they don't exist
     await sequelize.sync();
+    await migrateGuildConfigSchema();
     console.log(chalk.green("[DB] Database synchronized successfully."));
 
     // Clean up expired cooldowns on startup
@@ -552,6 +405,41 @@ export async function initializeDatabase() {
   } catch (error) {
     console.error(chalk.red("[DB] Unable to connect to the database:"), error);
     throw error;
+  }
+}
+
+async function applyDevelopmentSqlitePragmas() {
+  try {
+    await sequelize.query("PRAGMA journal_mode = WAL");
+    await sequelize.query("PRAGMA synchronous = NORMAL");
+    await sequelize.query("PRAGMA busy_timeout = 5000");
+  } catch (error) {
+    console.error(chalk.yellow("[DB] Failed to apply SQLite pragmas:"), error);
+  }
+}
+
+async function migrateGuildConfigSchema() {
+  const queryInterface = sequelize.getQueryInterface();
+
+  let table;
+  try {
+    table = await queryInterface.describeTable("guild_configs");
+  } catch {
+    return;
+  }
+
+  const missingColumns = [
+    ["attentionMode", { type: DataTypes.STRING, defaultValue: "conversation-aware" }],
+    ["opportunismLevel", { type: DataTypes.INTEGER, defaultValue: 15 }],
+    ["reactionsEnabled", { type: DataTypes.BOOLEAN, defaultValue: true }],
+    ["burstResponsesEnabled", { type: DataTypes.BOOLEAN, defaultValue: true }],
+    ["maxBurstMessages", { type: DataTypes.INTEGER, defaultValue: 5 }],
+  ] as const;
+
+  for (const [name, definition] of missingColumns) {
+    if (!(name in table)) {
+      await queryInterface.addColumn("guild_configs", name, definition);
+    }
   }
 }
 
@@ -571,63 +459,6 @@ export async function cleanupExpiredCooldowns() {
   } catch (error) {
     console.error(
       chalk.red("[DB] Error cleaning up expired cooldowns:"),
-      error,
-    );
-  }
-}
-
-// Check for pending scheduled messages
-export async function checkScheduledMessages() {
-  try {
-    const pendingMessages = await ScheduledMessage.findAll({
-      where: {
-        scheduledTime: {
-          [Op.lte]: new Date(),
-        },
-        sent: false,
-      },
-    });
-
-    return pendingMessages;
-  } catch (error) {
-    console.error(chalk.red("[DB] Error checking scheduled messages:"), error);
-    return [];
-  }
-}
-
-// Mark scheduled message as sent
-export async function markMessageAsSent(messageId: number) {
-  try {
-    await ScheduledMessage.update({ sent: true }, { where: { id: messageId } });
-    console.log(chalk.green(`[DB] Marked message ${messageId} as sent.`));
-  } catch (error) {
-    console.error(chalk.red("[DB] Error marking message as sent:"), error);
-  }
-}
-
-// Cleanup old sent scheduled messages (older than 30 days)
-export async function cleanupOldScheduledMessages() {
-  try {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const deleted = await ScheduledMessage.destroy({
-      where: {
-        sent: true,
-        updatedAt: {
-          [Op.lt]: thirtyDaysAgo,
-        },
-      },
-    });
-
-    if (deleted > 0) {
-      console.log(
-        chalk.green(`[DB] Cleaned up ${deleted} old scheduled messages.`),
-      );
-    }
-  } catch (error) {
-    console.error(
-      chalk.red("[DB] Error cleaning up old scheduled messages:"),
       error,
     );
   }
@@ -879,134 +710,9 @@ export async function removeChannelLock(channelId: string, guildId: string) {
   }
 }
 
-// Memory utility functions
-/**
- * Check if a memory key is already taken in a guild
- */
-export async function isMemoryKeyTaken(
-  guildId: string,
-  key: string,
-): Promise<boolean> {
-  try {
-    const existingMemory = await Memory.findOne({
-      where: { guildId, key },
-    });
-    return existingMemory !== null;
-  } catch (error) {
-    console.error(chalk.red("[DB] Error checking memory key:"), error);
-    return false;
-  }
-}
-
-export async function createMemory(
-  userId: string,
-  guildId: string,
-  key: string,
-  content: string,
-) {
-  try {
-    // Check if key already exists in this guild
-    const keyTaken = await isMemoryKeyTaken(guildId, key);
-    if (keyTaken) {
-      console.error(chalk.red("[DB] Memory key already exists in guild:"), key);
-      return null;
-    }
-
-    // Create new memory
-    const memory = await Memory.create({
-      userId,
-      guildId,
-      key,
-      content,
-    });
-    return memory;
-  } catch (error) {
-    console.error(chalk.red("[DB] Error creating memory:"), error);
-    return null;
-  }
-}
-
-export async function updateMemory(
-  userId: string,
-  guildId: string,
-  key: string,
-  content: string,
-) {
-  try {
-    // First try to find existing memory by key in guild
-    const existingMemory = await Memory.findOne({
-      where: { guildId, key },
-    });
-
-    if (existingMemory) {
-      // Update existing memory (regardless of who created it)
-      existingMemory.content = content;
-      existingMemory.userId = userId; // Update the userId to current user
-      await existingMemory.save();
-      return existingMemory;
-    } else {
-      // Create new memory if none exists
-      const memory = await Memory.create({
-        userId,
-        guildId,
-        key,
-        content,
-      });
-      return memory;
-    }
-  } catch (error) {
-    console.error(chalk.red("[DB] Error updating memory:"), error);
-    return null;
-  }
-}
-
-export async function deleteMemory(
-  userId: string,
-  guildId: string,
-  key: string,
-) {
-  try {
-    const deleted = await Memory.destroy({
-      where: { guildId, key },
-    });
-    return deleted > 0;
-  } catch (error) {
-    console.error(chalk.red("[DB] Error deleting memory:"), error);
-    return false;
-  }
-}
-
-export async function getAllMemories(userId: string, guildId: string) {
-  try {
-    const memories = await Memory.findAll({
-      where: { userId, guildId },
-      order: [["updatedAt", "DESC"]],
-    });
-    return memories;
-  } catch (error) {
-    console.error(chalk.red("[DB] Error fetching memories:"), error);
-    return [];
-  }
-}
-
-export async function getGuildMemories(guildId: string) {
-  try {
-    const memories = await Memory.findAll({
-      where: { guildId },
-      order: [["updatedAt", "DESC"]],
-    });
-    return memories;
-  } catch (error) {
-    console.error(chalk.red("[DB] Error fetching guild memories:"), error);
-    return [];
-  }
-}
-
 // Store interval IDs for cleanup
 let cleanupIntervals: {
   cooldownCleanup?: NodeJS.Timeout;
-  scheduleCleanup?: NodeJS.Timeout;
-  messageProcessor?: NodeJS.Timeout;
   channelUnlock?: NodeJS.Timeout;
   initialTimeout?: NodeJS.Timeout;
 } = {};
@@ -1017,12 +723,6 @@ let cleanupIntervals: {
 function clearExistingIntervals() {
   if (cleanupIntervals.cooldownCleanup) {
     clearInterval(cleanupIntervals.cooldownCleanup);
-  }
-  if (cleanupIntervals.scheduleCleanup) {
-    clearInterval(cleanupIntervals.scheduleCleanup);
-  }
-  if (cleanupIntervals.messageProcessor) {
-    clearInterval(cleanupIntervals.messageProcessor);
   }
   if (cleanupIntervals.channelUnlock) {
     clearInterval(cleanupIntervals.channelUnlock);
@@ -1048,26 +748,15 @@ function startBackgroundTasks() {
     5 * 60 * 1000,
   );
 
-  // Cleanup old scheduled messages daily
-  cleanupIntervals.scheduleCleanup = setInterval(
-    cleanupOldScheduledMessages,
-    24 * 60 * 60 * 1000,
-  );
-
-  // Start scheduled message processing and channel unlocking with proper timing
+  // Start channel unlocking with proper timing
   cleanupIntervals.initialTimeout = setTimeout(
     function () {
-      cleanupIntervals.messageProcessor = setInterval(
-        processScheduledMessages,
-        60 * 1000,
-      );
       cleanupIntervals.channelUnlock = setInterval(
         cleanupExpiredLockedChannels,
         60 * 1000,
       );
 
       // Run initial cleanup
-      processScheduledMessages();
       cleanupExpiredLockedChannels();
     },
     (60 - new Date().getSeconds()) * 1000,

@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import { Client, Events } from "discord.js";
 import { startActivityUpdates, stopActivityUpdates } from "@/activity";
+import { startFrankWorker } from "@/frank";
 
 export const name = "Ready";
 export const type = Events.ClientReady;
@@ -9,6 +10,7 @@ export const once = true;
 export async function execute(client: Client) {
   // if you have shutdown hooks elsewhere, keep stopActivityUpdates available
   startActivityUpdates(client);
+  startFrankWorker();
 
   console.log(
     chalk.yellow("Ready!"),
@@ -21,6 +23,8 @@ export async function execute(client: Client) {
     }`,
     "\n",
   );
+
+  console.log(chalk.green("Frank worker started!"));
 }
 
 export { stopActivityUpdates };

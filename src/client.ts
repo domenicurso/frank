@@ -10,13 +10,11 @@ export const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMessageReactions,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.DirectMessages,
   ],
   partials: [
-    Partials.Channel, // Required for DM channels
-    Partials.Message, // Required for DM messages
+    Partials.Message,
   ],
 });
 

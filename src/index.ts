@@ -4,9 +4,10 @@ import {
   setDiscordClient,
   stopBackgroundTasks,
 } from "@/database/index";
-import { trackCommandUsage } from "@/database/userStats";
 import { stopActivityUpdates } from "@/events/ready";
 import { stopProcessingCleanup } from "@/events/ai";
+import { stopFrankWorker } from "@/frank";
+import { logError, logInfo, logWarn } from "@/log";
 
 import chalk from "chalk";
 import { Events, MessageFlags } from "discord.js";
@@ -28,6 +29,7 @@ const now = new Date()
 
 console.log(chalk.cyan(`\n[${now}]`));
 console.log(chalk.cyan.bold(`Initializing...\n`));
+client.commands.clear();
 
 // Database initialization happens in initializeDatabase()
 
@@ -48,10 +50,15 @@ async function loadCommandFile(
       client.commands.set(command.definition.name, command); // <-- store on client
       loadedCommands.push(command.name);
     } else {
-      console.error(`Missing definition, execute, or name in ${filePath}`);
+      logWarn("loader", "Command module missing required exports", {
+        fileName,
+        filePath,
+      });
     }
   } catch (error) {
-    console.error(`Error loading command ${fileName}:`, error);
+    logError("loader", `Failed to load command ${fileName}`, error, {
+      filePath,
+    });
   }
 }
 
@@ -80,7 +87,9 @@ async function loadCommandsFromDirectory(dirPath: string): Promise<void> {
       }
     }
   } catch (error) {
-    console.error(`Error reading commands directory ${dirPath}:`, error);
+    logError("loader", "Failed to read commands directory", error, {
+      dirPath,
+    });
   }
 }
 
@@ -101,16 +110,26 @@ async function loadEventFile(
     const event = await import(filePath);
     if (event.name && event.type && event.execute) {
       loadedEvents.push(event.name || event.type);
+      client.removeAllListeners(event.type);
       if (event.once) {
-        client.once(event.type, (...args) => event.execute(...args));
+        if (event.type === Events.ClientReady && client.isReady()) {
+          await event.execute(client);
+        } else {
+          client.once(event.type, (...args) => event.execute(...args));
+        }
       } else {
         client.on(event.type, (...args) => event.execute(...args));
       }
     } else {
-      console.error(`Missing name, type, or execute in ${filePath}`);
+      logWarn("loader", "Event module missing required exports", {
+        fileName,
+        filePath,
+      });
     }
   } catch (error) {
-    console.error(`Error loading event ${fileName}:`, error);
+    logError("loader", `Failed to load event ${fileName}`, error, {
+      filePath,
+    });
   }
 }
 
@@ -119,7 +138,9 @@ async function loadEventFile(
  */
 async function loadEventsFromDirectory(dirPath: string): Promise<void> {
   if (!fs.existsSync(dirPath)) {
-    console.log("No events directory found, skipping event loading");
+    logWarn("loader", "No events directory found; skipping event loading", {
+      dirPath,
+    });
     return;
   }
 
@@ -140,7 +161,9 @@ async function loadEventsFromDirectory(dirPath: string): Promise<void> {
       }
     }
   } catch (error) {
-    console.error(`Error reading events directory ${dirPath}:`, error);
+    logError("loader", "Failed to read events directory", error, {
+      dirPath,
+    });
   }
 }
 
@@ -161,23 +184,34 @@ console.log(
 );
 
 // Command handler
+client.removeAllListeners(Events.InteractionCreate);
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
 
   if (!command) {
-    console.error(`No command matching ${interaction.commandName} was found`);
+    logError("discord", "Slash command was invoked but not found", undefined, {
+      commandName: interaction.commandName,
+      userId: interaction.user.id,
+    });
     return;
   }
 
   try {
-    console.log(
-      `${chalk.green(new Date().toLocaleString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }))} ${chalk.blue.bold(interaction.user.username)} executed ${chalk.yellow.bold(command.name)} command`,
-    );
+    logInfo("discord", "Slash command executed", {
+      command: command.name,
+      user: interaction.user.username,
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+    });
     await command.execute(interaction);
   } catch (error) {
-    console.error(error);
+    logError("discord", `Command ${command.name} failed`, error, {
+      command: command.name,
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+    });
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp({
         content: "There was an error while executing this command!",
@@ -206,7 +240,7 @@ try {
   await initializeDatabase();
   console.log(chalk.green("\nDatabase initialized successfully!"));
 } catch (error) {
-  console.error(chalk.red("\nFailed to initialize database:"), error);
+  logError("boot", "Failed to initialize database", error);
   process.exit(1);
 }
 
@@ -233,6 +267,9 @@ async function gracefulShutdown(signal: string) {
     console.log(chalk.blue("Stopping AI processing cleanup..."));
     stopProcessingCleanup();
 
+    console.log(chalk.blue("Stopping Frank worker..."));
+    stopFrankWorker();
+
     // Gracefully close Discord client
     console.log(chalk.blue("Destroying Discord client..."));
     client.destroy();
@@ -253,17 +290,12 @@ process.on("SIGUSR2", () => gracefulShutdown("SIGUSR2"));
 
 // Handle uncaught exceptions and promise rejections
 process.on("uncaughtException", (error) => {
-  console.error(chalk.red("Uncaught Exception:"), error);
+  logError("process", "Uncaught exception", error);
   gracefulShutdown("uncaughtException");
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-  console.error(
-    chalk.red("Unhandled Rejection at:"),
-    promise,
-    chalk.red("reason:"),
-    reason,
-  );
+  logError("process", "Unhandled rejection", reason, { promise });
   gracefulShutdown("unhandledRejection");
 });
 

@@ -1,0 +1,9 @@
+export const FRANK_BURST_SETTLE_MS = 850;
+export const FRANK_MAX_VISIBLE_MESSAGES = 18;
+export const FRANK_MAX_BURST_MESSAGES = 5;
+export const FRANK_DEFAULT_TYPING_CPS = 9.5;
+export const FRANK_MIN_TYPING_MS = 325;
+export const FRANK_MAX_TYPING_MS = 4_200;
+export const FRANK_JOB_POLL_MS = 150;
+export const FRANK_MEMORY_BATCH_SIZE = 24;
+export const FRANK_MEMORY_DEBOUNCE_MS = 12_000;

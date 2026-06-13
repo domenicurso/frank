@@ -34,6 +34,9 @@
    CLIENT_ID =
    TEST_GUILD_ID =
    OPENROUTER_API_KEY =
+   FRANK_CHARACTER_MODEL = x-ai/grok-4.3
+   FRANK_PROCESSOR_MODEL = openai/gpt-5.4-mini
+   FRANK_DEBUG = false
    ```
 
 4. **Deploy Commands**

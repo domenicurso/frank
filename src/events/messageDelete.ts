@@ -1,15 +1,12 @@
-import { trackMessageDeleted } from "@/database/userStats";
+import { ingestMessageDelete } from "@/frank";
 import { Events, Message } from "discord.js";
+import type { PartialMessage } from "discord.js";
 
 export const name = "MessageDelete";
 export const type = Events.MessageDelete;
 
-export async function execute(message: Message) {
-  // Ignore bot messages and messages not in guilds
-  if (message.author.bot || !message.guild) {
-    return;
+export async function execute(message: Message | PartialMessage) {
+  if (message.guild && message.channel?.isTextBased()) {
+    await ingestMessageDelete(message);
   }
-
-  // Decrement message count for the user
-  await trackMessageDeleted(message.author.id, message.guild.id);
 }
