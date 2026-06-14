@@ -70,15 +70,22 @@ export function summarizeEvent(event: PersistedEvent | null | undefined) {
 export function summarizeSnapshot(snapshot: ResponseSnapshot) {
   return {
     snapshotId: snapshot.id,
+    concernId: snapshot.concernId,
+    laneKey: snapshot.laneKey,
     guildId: snapshot.guildId,
     channelId: snapshot.channelId,
     anchorMessageId: snapshot.anchorMessageId,
     attentionReason: snapshot.attentionDecision.reason,
     opportunismScore: snapshot.attentionDecision.opportunismScore,
-    pendingIntentChunks: snapshot.pendingIntent?.remainingChunks.length ?? 0,
+    pendingIntentChunks:
+      snapshot.pendingIntentContext?.remainingChunks.length ??
+      snapshot.pendingIntent?.remainingChunks.length ??
+      0,
     memory: snapshot.memory.map(
       (item) => `${item.subject}: ${truncate(item.summary, 100)}`,
     ),
+    focusMessageCount: snapshot.focusMessages?.length ?? 0,
+    focusChat: summarizeMessages(snapshot.focusMessages ?? []),
     visibleMessageCount: snapshot.visibleMessages.length,
     visibleChat: summarizeMessages(snapshot.visibleMessages),
   };

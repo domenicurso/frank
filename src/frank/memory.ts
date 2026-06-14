@@ -307,6 +307,7 @@ export async function retrieveProfileMemory(
     focusUserId?: string | null;
   } = {},
 ) {
+  try {
   const fallbackRecentUserIds = [
     ...new Set(
       [...visibleMessages]
@@ -330,6 +331,9 @@ export async function retrieveProfileMemory(
       subject: profile.displayName,
       summary: buildRetrievalSummary(profile),
     }));
+  } catch {
+    return [];
+  }
 }
 
 export async function getProfileForCommand(

@@ -8,6 +8,10 @@ export const FRANK_JOB_TYPES = [
 export type FrankJobType = (typeof FRANK_JOB_TYPES)[number];
 
 export const FRANK_QUEUE_NAMES = [
+  "lane_update",
+  "lane_generate",
+  "lane_followup",
+  "memory_refresh",
   "runtime_update",
   "settle_channel",
   "generate_intent",
@@ -26,6 +30,52 @@ export type IntentStatus =
   | "invalidated";
 export type InterruptPolicy = "default";
 
+export type LaneStatus = "idle" | "queued" | "generating" | "sending";
+export type ConcernStatus =
+  | "queued"
+  | "generating"
+  | "sent"
+  | "merged"
+  | "dismissed"
+  | "cancelled"
+  | "failed";
+export type TurnStatus = "planned" | "streaming" | "sent" | "aborted" | "failed";
+export type LaneKey = string;
+
+export type ConcernReasonCode =
+  | "direct_mention"
+  | "reply_to_bot"
+  | "continuation"
+  | "bare_summon"
+  | "message_edited"
+  | "message_deleted";
+
+export type ConcernDecision =
+  | {
+      action: "queue_new_concern";
+      laneKey: LaneKey;
+      reasonCode: ConcernReasonCode;
+      settleAt: string;
+    }
+  | {
+      action: "merge_into_lane";
+      laneKey: LaneKey;
+      reasonCode: ConcernReasonCode;
+      settleAt: string;
+    }
+  | {
+      action: "defer_after_active_turn";
+      laneKey: LaneKey;
+      reasonCode: ConcernReasonCode;
+      settleAt: string;
+    }
+  | {
+      action: "dismiss_as_context";
+      laneKey: null;
+      reasonCode: "continuation" | "bare_summon";
+      settleAt: null;
+    };
+
 export type DiscordEvent =
   | {
       type: "message_create";
@@ -38,6 +88,7 @@ export type DiscordEvent =
       authorUsername: string;
       content: string;
       mentionsBot: boolean;
+      repliesToBot?: boolean;
       mentionsUserIds: string[];
       mentionedUsers: Array<{
         id: string;
@@ -138,6 +189,7 @@ export type VisibleMessage = {
   authorUsername: string;
   content: string;
   mentionsBot: boolean;
+  repliesToBot?: boolean;
   mentionedUsers?: Array<{
     id: string;
     username: string;
@@ -160,6 +212,8 @@ export type PendingIntentContext = {
   anchorMessageId: string | null;
   interruptedAt: string;
   remainingChunks: string[];
+  laneKey?: LaneKey;
+  turnId?: string | null;
 };
 
 export type ChannelRuntimeProjection = {
@@ -194,6 +248,54 @@ export type ChannelControl = {
   activeSnapshotId: string | null;
   activeSnapshotCreatedAt: string | null;
   pendingSettleAt: string | null;
+  updatedAt: string;
+};
+
+export type ConversationLane = {
+  laneKey: LaneKey;
+  guildId: string;
+  channelId: string;
+  authorId: string;
+  replyRootMessageId: string | null;
+  status: LaneStatus;
+  activeConcernId: string | null;
+  activeTurnId: string | null;
+  lastHumanActivityAt: string | null;
+  lastBotActivityAt: string | null;
+  updatedAt: string;
+};
+
+export type Concern = {
+  id: string;
+  laneKey: LaneKey;
+  channelId: string;
+  guildId: string;
+  sourceEventIds: string[];
+  sourceMessageIds: string[];
+  focusAuthorId: string;
+  anchorMessageId: string | null;
+  status: ConcernStatus;
+  supersededByConcernId: string | null;
+  reasonCode: ConcernReasonCode;
+  attemptCount: number;
+  snapshotId: string | null;
+  snapshotCreatedAt: string | null;
+  snapshot: ConcernSnapshot | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Turn = {
+  id: string;
+  concernId: string;
+  laneKey: LaneKey;
+  channelId: string;
+  guildId: string;
+  status: TurnStatus;
+  plannedChunks: BurstChunk[];
+  sentChunkCount: number;
+  pendingIntentContext: PendingIntentContext | null;
+  createdAt: string;
   updatedAt: string;
 };
 
@@ -280,17 +382,24 @@ export type SnapshotMemoryBlock = {
   summary: string;
 };
 
-export type ResponseSnapshot = {
+export type ConcernSnapshot = {
   id: string;
+  concernId?: string;
+  laneKey?: LaneKey;
   guildId: string;
   channelId: string;
   createdAt: string;
   anchorMessageId: string | null;
+  focusAuthorId?: string;
+  focusMessages?: VisibleMessage[];
   visibleMessages: VisibleMessage[];
+  pendingIntentContext?: PendingIntentContext | null;
   pendingIntent: PendingIntentContext | null;
   memory: SnapshotMemoryBlock[];
   attentionDecision: AttentionDecision;
 };
+
+export type ResponseSnapshot = ConcernSnapshot;
 
 export type ConversationIntent = {
   id: string;
@@ -372,17 +481,48 @@ export type GenerateIntentJob = {
   responseDecisionAt: string;
 };
 
+export type LaneUpdateJob = {
+  eventId: string;
+};
+
+export type LaneGenerateJob = {
+  guildId: string;
+  channelId: string;
+  laneKey: LaneKey;
+  concernId: string;
+  decisionCompletedAt: string;
+};
+
+export type LaneFollowupJob = {
+  guildId: string;
+  channelId: string;
+  laneKey: LaneKey;
+};
+
+export type MemoryRefreshJob = {
+  guildId: string;
+  channelId: string;
+  sourceEventId: string;
+};
+
 export type QueueItemPayload =
   | RuntimeUpdateJob
   | SettleChannelJob
   | GenerateIntentJob
-  | MemoryExtractionJob;
+  | MemoryExtractionJob
+  | LaneUpdateJob
+  | LaneGenerateJob
+  | LaneFollowupJob
+  | MemoryRefreshJob;
 
 export type QueueItem = {
   id: string;
   queueName: FrankQueueName;
   channelId: string | null;
   guildId: string | null;
+  laneKey?: LaneKey | null;
+  concernId?: string | null;
+  turnId?: string | null;
   intentId: string | null;
   dedupeKey: string | null;
   state: QueueItemState;

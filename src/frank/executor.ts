@@ -39,6 +39,9 @@ type ActiveExecution = {
   snapshot: ResponseSnapshot;
   controller: AbortController;
   sentMessageCount: number;
+  laneKey: string;
+  turnId: string;
+  channelId: string;
 };
 
 const activeExecutions = new Map<string, ActiveExecution>();
@@ -55,31 +58,47 @@ export async function sendChannelTyping(channelId: string) {
   return true;
 }
 
-export function interruptChannelExecution(
-  channelId: string,
+export function interruptLaneExecution(
+  laneKey: string,
   reason: InvalidationReason,
 ) {
-  const active = activeExecutions.get(channelId);
+  const active = activeExecutions.get(laneKey);
   if (!active) return false;
 
   active.controller.abort(reason);
   return true;
 }
 
-export function hasPendingUnsentExecution(channelId: string) {
-  const active = activeExecutions.get(channelId);
+export function hasPendingUnsentExecution(laneKey: string) {
+  const active = activeExecutions.get(laneKey);
   if (!active) return false;
   return active.sentMessageCount === 0;
 }
 
-export function hasActiveExecution(channelId: string) {
-  return activeExecutions.has(channelId);
+export function hasActiveExecution(laneKey: string) {
+  return activeExecutions.has(laneKey);
+}
+
+export function getActiveExecutionState(laneKey: string) {
+  const active = activeExecutions.get(laneKey);
+  if (!active) {
+    return null;
+  }
+
+  return {
+    laneKey: active.laneKey,
+    turnId: active.turnId,
+    channelId: active.channelId,
+    sentMessageCount: active.sentMessageCount,
+    snapshotId: active.snapshot.id,
+  };
 }
 
 export async function abortAllActiveExecutions(reason: InvalidationReason) {
-  for (const [channelId, active] of activeExecutions.entries()) {
+  for (const [laneKey, active] of activeExecutions.entries()) {
     frankDebug("executor", "abort_all", {
-      channelId,
+      laneKey,
+      channelId: active.channelId,
       snapshotId: active.snapshot.id,
       reason,
     });
@@ -87,8 +106,8 @@ export async function abortAllActiveExecutions(reason: InvalidationReason) {
   }
 }
 
-export function getPendingUnsentExecutionSnapshotId(channelId: string) {
-  const active = activeExecutions.get(channelId);
+export function getPendingUnsentExecutionSnapshotId(laneKey: string) {
+  const active = activeExecutions.get(laneKey);
   if (!active || active.sentMessageCount > 0) {
     return null;
   }
@@ -96,8 +115,8 @@ export function getPendingUnsentExecutionSnapshotId(channelId: string) {
   return active.snapshot.id;
 }
 
-export function getPendingUnsentExecutionContext(channelId: string) {
-  const active = activeExecutions.get(channelId);
+export function getPendingUnsentExecutionContext(laneKey: string) {
+  const active = activeExecutions.get(laneKey);
   if (!active || active.sentMessageCount > 0) {
     return null;
   }
@@ -114,6 +133,8 @@ export function getPendingUnsentExecutionContext(channelId: string) {
 
 export async function executeStreamedBurstPlan(options: {
   snapshot: ResponseSnapshot;
+  laneKey: string;
+  turnId: string;
   typingStartedAt: string;
   maxBurstMessages: number;
   reactionsEnabled: boolean;
@@ -133,10 +154,13 @@ export async function executeStreamedBurstPlan(options: {
   const textChannel = channel as unknown as SendableDiscordChannel;
 
   const controller = new AbortController();
-  activeExecutions.set(options.snapshot.channelId, {
+  activeExecutions.set(options.laneKey, {
     snapshot: options.snapshot,
     controller,
     sentMessageCount: 0,
+    laneKey: options.laneKey,
+    turnId: options.turnId,
+    channelId: options.snapshot.channelId,
   });
 
   const signal = AbortSignal.any([
@@ -188,6 +212,7 @@ export async function executeStreamedBurstPlan(options: {
         chunk: queuedChunk,
         startedAt: chunkStartedAt.get(index) ?? Date.now(),
         isFirst: sentMessageIds.length === 0,
+        laneKey: options.laneKey,
         snapshot: options.snapshot,
         textChannel,
         sentMessageIds,
@@ -247,6 +272,7 @@ export async function executeStreamedBurstPlan(options: {
     frankDebug("executor", "streamed_burst.input", {
       snapshotId: options.snapshot.id,
       channelId: options.snapshot.channelId,
+      laneKey: options.laneKey,
       anchorMessageId: options.snapshot.anchorMessageId,
       typingStartedAt: options.typingStartedAt,
       maxBurstMessages: options.maxBurstMessages,
@@ -399,7 +425,7 @@ export async function executeStreamedBurstPlan(options: {
   } finally {
     clearInterval(flushTimer);
     clearTimeout(typingIndicatorTimer);
-    activeExecutions.delete(options.snapshot.channelId);
+    activeExecutions.delete(options.laneKey);
   }
 }
 
@@ -468,6 +494,7 @@ async function sendChunkWhenTypingBudgetMet(options: {
   chunk: { text: string; pauseMs?: number };
   startedAt: number;
   isFirst: boolean;
+  laneKey: string;
   snapshot: ResponseSnapshot;
   textChannel: SendableDiscordChannel;
   sentMessageIds: string[];
@@ -528,7 +555,7 @@ async function sendChunkWhenTypingBudgetMet(options: {
     text: options.chunk.text,
     createdAt: sent.createdAt.toISOString(),
   });
-  const activeExecution = activeExecutions.get(options.snapshot.channelId);
+  const activeExecution = activeExecutions.get(options.laneKey);
   if (activeExecution) {
     activeExecution.sentMessageCount = options.sentMessageIds.length;
   }

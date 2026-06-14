@@ -14,6 +14,7 @@ export function toVisibleMessage(event: Extract<DiscordEvent, { type: "message_c
     authorUsername: event.authorUsername || event.authorName,
     content: event.content,
     mentionsBot: event.mentionsBot,
+    repliesToBot: event.repliesToBot,
     mentionedUsers: event.mentionedUsers,
     mentionedChannels: event.mentionedChannels,
     replyToMessageId: event.replyToMessageId,

@@ -1,3 +1,4 @@
+import { prepareFrankSchemaForHardCutover } from "@/frank/queueStore";
 import { initializeFrankModels } from "@/frank/store";
 import chalk from "chalk";
 import {
@@ -387,6 +388,7 @@ export async function initializeDatabase() {
 
     if (isDevelopment) {
       await applyDevelopmentSqlitePragmas();
+      await prepareFrankSchemaForHardCutover();
     }
 
     // Simple sync - create tables if they don't exist

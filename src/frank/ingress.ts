@@ -1,21 +1,9 @@
 import { client } from "@/client";
 import { FRANK_MEMORY_DEBOUNCE_MS } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
-import {
-  getPendingUnsentExecutionContext,
-  interruptChannelExecution,
-} from "@/frank/executor";
-import { getIncomingMessageInterruptReason } from "@/frank/ingressPolicy";
 import { getFrankGuildSettings, isFrankChannelAllowed } from "@/frank/config";
-import {
-  getActiveIntentForChannel,
-  supersedeActiveIntent,
-  upsertQueueItem,
-} from "@/frank/queueStore";
-import {
-  appendFrankEvent,
-  getFrankEventById,
-} from "@/frank/store";
+import { upsertLaneWork } from "@/frank/queueStore";
+import { appendFrankEvent } from "@/frank/store";
 import type { DiscordEvent } from "@/frank/types";
 import type {
   Message,
@@ -166,36 +154,6 @@ function guessMediaTypeFromUrl(url: string) {
   return "unknown";
 }
 
-async function getInterruptReasonForMessage(
-  message: Message,
-  mentionsBot: boolean,
-) {
-  let pendingUnsentExecution = getPendingUnsentExecutionContext(message.channel.id);
-
-  if (!pendingUnsentExecution) {
-    const { intent } = await getActiveIntentForChannel(
-      message.guild!.id,
-      message.channel.id,
-    );
-    if (intent && (intent.status === "pending" || intent.status === "generating")) {
-      const sourceEvent = await getFrankEventById(intent.sourceEventId);
-      pendingUnsentExecution = {
-        latestAuthorId:
-          sourceEvent && "authorId" in sourceEvent ? sourceEvent.authorId : null,
-        anchorMessageId: intent.snapshot.anchorMessageId,
-        snapshotId: intent.snapshotId,
-      };
-    }
-  }
-
-  return getIncomingMessageInterruptReason({
-    authorId: message.author.id,
-    mentionsBot,
-    repliesToBot: message.mentions.repliedUser?.id === client.user?.id,
-    pendingUnsentExecution,
-  });
-}
-
 function shouldScheduleMemoryExtraction(
   message: Message,
   mentionsBot: boolean,
@@ -286,7 +244,6 @@ export async function ingestMessageCreate(message: Message) {
   const mentionsBot =
     message.mentions.users.has(client.user?.id ?? "") || hasDirectNameMention(message);
   const shouldExtractMemory = shouldScheduleMemoryExtraction(message, mentionsBot);
-  const interruptReason = await getInterruptReasonForMessage(message, mentionsBot);
   const mentionedUsers = collectMentionedUsers(message);
   const mentionedChannels = collectMentionedChannels(message);
   const replyPreview = collectReplyPreview(message);
@@ -303,6 +260,7 @@ export async function ingestMessageCreate(message: Message) {
     authorUsername: message.author.username,
     content: message.content,
     mentionsBot,
+    repliesToBot: message.mentions.repliedUser?.id === client.user?.id,
     mentionsUserIds: [...message.mentions.users.keys()],
     mentionedUsers,
     mentionedChannels,
@@ -326,31 +284,22 @@ export async function ingestMessageCreate(message: Message) {
   });
 
   const eventId = await appendFrankEvent(event);
-  if (interruptReason) {
-    interruptChannelExecution(message.channel.id, interruptReason);
-    await supersedeActiveIntent({
-      guildId: message.guild.id,
-      channelId: message.channel.id,
-      reason: interruptReason,
-    });
-  }
-
-  await upsertQueueItem("runtime_update", { eventId }, {
-    dedupeKey: `runtime:${eventId}`,
+  await upsertLaneWork("lane_update", { eventId }, {
+    dedupeKey: `lane-update:${eventId}`,
     guildId: message.guild.id,
     channelId: message.channel.id,
     availableAt: new Date(),
   });
   if (shouldExtractMemory) {
-    await upsertQueueItem(
-      "memory_extraction",
+    await upsertLaneWork(
+      "memory_refresh",
       {
         guildId: message.guild.id,
         channelId: message.channel.id,
         sourceEventId: eventId,
       },
       {
-        dedupeKey: `memory:${message.channel.id}`,
+        dedupeKey: `memory-refresh:${message.channel.id}`,
         guildId: message.guild.id,
         channelId: message.channel.id,
         availableAt: new Date(Date.now() + FRANK_MEMORY_DEBOUNCE_MS),
@@ -360,10 +309,9 @@ export async function ingestMessageCreate(message: Message) {
 
   frankDebug("ingress", "message_create.output", {
     eventId,
-    interruptReason,
     scheduledJobs: [
-      "runtime_update",
-      ...(shouldExtractMemory ? ["memory_extraction"] : []),
+      "lane_update",
+      ...(shouldExtractMemory ? ["memory_refresh"] : []),
     ],
   });
 }
@@ -399,14 +347,8 @@ export async function ingestMessageUpdate(
   });
 
   const eventId = await appendFrankEvent(event);
-  interruptChannelExecution(newMessage.channel.id, "message_edited");
-  await supersedeActiveIntent({
-    guildId: newMessage.guild.id,
-    channelId: newMessage.channel.id,
-    reason: "message_edited",
-  });
-  await upsertQueueItem("runtime_update", { eventId }, {
-    dedupeKey: `runtime:${eventId}`,
+  await upsertLaneWork("lane_update", { eventId }, {
+    dedupeKey: `lane-update:${eventId}`,
     guildId: newMessage.guild.id,
     channelId: newMessage.channel.id,
     availableAt: new Date(),
@@ -437,14 +379,8 @@ export async function ingestMessageDelete(message: Message | PartialMessage) {
   });
 
   const eventId = await appendFrankEvent(event);
-  interruptChannelExecution(message.channel.id, "message_deleted");
-  await supersedeActiveIntent({
-    guildId: message.guild.id,
-    channelId: message.channel.id,
-    reason: "message_deleted",
-  });
-  await upsertQueueItem("runtime_update", { eventId }, {
-    dedupeKey: `runtime:${eventId}`,
+  await upsertLaneWork("lane_update", { eventId }, {
+    dedupeKey: `lane-update:${eventId}`,
     guildId: message.guild.id,
     channelId: message.channel.id,
     availableAt: new Date(),
@@ -481,8 +417,8 @@ export async function ingestReactionAdd(
   });
 
   const eventId = await appendFrankEvent(event);
-  await upsertQueueItem("runtime_update", { eventId }, {
-    dedupeKey: `runtime:${eventId}`,
+  await upsertLaneWork("lane_update", { eventId }, {
+    dedupeKey: `lane-update:${eventId}`,
     guildId: message.guild.id,
     channelId: message.channel.id,
     availableAt: new Date(),

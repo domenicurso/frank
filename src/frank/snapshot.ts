@@ -1,61 +1,184 @@
-import { decideAttentionWithClassifier } from "@/frank/attention";
 import { frankDebug } from "@/frank/debug";
 import { summarizeMessages, summarizeSnapshot } from "@/frank/debugView";
 import { retrieveProfileMemory } from "@/frank/memory";
+import { getLatestPendingIntentForLane } from "@/frank/queueStore";
 import type {
   ChannelRuntimeProjection,
+  Concern,
+  ConversationLane,
   FrankGuildSettings,
   ResponseSnapshot,
+  VisibleMessage,
 } from "@/frank/types";
 import { randomUUID } from "node:crypto";
 
-export async function buildResponseSnapshot(
-  runtime: ChannelRuntimeProjection,
-  settings: FrankGuildSettings,
-  botUserId: string,
-): Promise<ResponseSnapshot | null> {
-  const latestMessage = runtime.visibleMessages[runtime.visibleMessages.length - 1] ?? null;
-  const attentionDecision = await decideAttentionWithClassifier(
-    runtime,
-    latestMessage,
-    settings,
-    botUserId,
-  );
+const QUESTION_STARTERS = [
+  "what",
+  "why",
+  "how",
+  "when",
+  "where",
+  "who",
+  "can",
+  "could",
+  "should",
+  "would",
+  "do",
+  "does",
+  "did",
+  "is",
+  "are",
+  "help",
+];
 
-  if (!attentionDecision.shouldRespond) {
+function normalizeWords(input: string) {
+  return input
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean);
+}
+
+export function isBareSummonContent(content: string) {
+  const words = normalizeWords(content);
+  return words.length > 0 && words.every((word) => word === "frank" || word === "botello");
+}
+
+export function resolveFocusMessages(
+  runtime: ChannelRuntimeProjection,
+  concern: Concern,
+) {
+  const byId = new Map(runtime.visibleMessages.map((message) => [message.id, message]));
+  return concern.sourceMessageIds
+    .map((messageId) => byId.get(messageId))
+    .filter((message): message is VisibleMessage => Boolean(message));
+}
+
+function scoreAnchorMessage(
+  message: VisibleMessage,
+  index: number,
+  lane: ConversationLane,
+) {
+  const content = message.content.trim().toLowerCase();
+  const words = normalizeWords(content);
+  const startsWithQuestion = words.length > 0 && QUESTION_STARTERS.includes(words[0]!);
+  const isBareSummon = isBareSummonContent(content);
+
+  let score = 0;
+  score += Math.max(0, 40 - index * 3);
+  if (message.mentionsBot) score += 120;
+  if (message.repliesToBot) score += 115;
+  if (content.includes("?")) score += 70;
+  if (startsWithQuestion) score += 60;
+  if (content.length >= 24) score += 10;
+  if (lane.replyRootMessageId) score += index * 2;
+  if (isBareSummon) score -= 90;
+  return score;
+}
+
+export function chooseAnchorMessageId(
+  focusMessages: VisibleMessage[],
+  lane: ConversationLane,
+) {
+  let bestId: string | null = null;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  let bestIndex = Number.MAX_SAFE_INTEGER;
+
+  for (const [index, message] of focusMessages.entries()) {
+    const candidate = {
+      id: message.id,
+      score: scoreAnchorMessage(message, index, lane),
+      index,
+    };
+
+    if (
+      candidate.score > bestScore ||
+      (candidate.score === bestScore && candidate.index < bestIndex)
+    ) {
+      bestId = candidate.id;
+      bestScore = candidate.score;
+      bestIndex = candidate.index;
+    }
+  }
+
+  return bestId ?? focusMessages[0]?.id ?? null;
+}
+
+function toAttentionReason(reasonCode: Concern["reasonCode"]) {
+  switch (reasonCode) {
+    case "bare_summon":
+      return "direct_mention" as const;
+    case "message_deleted":
+    case "message_edited":
+      return "continuation" as const;
+    default:
+      return reasonCode;
+  }
+}
+
+export async function buildResponseSnapshot(options: {
+  runtime: ChannelRuntimeProjection;
+  concern: Concern;
+  lane: ConversationLane;
+  settings: FrankGuildSettings;
+  compact?: boolean;
+}) {
+  const focusMessages = resolveFocusMessages(options.runtime, options.concern);
+  if (focusMessages.length === 0) {
     frankDebug("snapshot", "skipped", {
-      channelId: runtime.channelId,
-      reason: attentionDecision.reason,
-      latestMessage: latestMessage?.content ?? null,
+      channelId: options.runtime.channelId,
+      laneKey: options.lane.laneKey,
+      concernId: options.concern.id,
+      reason: "no_focus_messages",
     });
     return null;
   }
 
-  const focusUserId =
-    attentionDecision.reason === "direct_mention" ||
-    attentionDecision.reason === "reply_to_bot" ||
-    attentionDecision.reason === "continuation"
-      ? latestMessage?.authorId ?? null
-      : null;
-  const memory = await retrieveProfileMemory(runtime.guildId, runtime.visibleMessages, {
-    focusUserId,
-  });
+  const anchorMessageId = chooseAnchorMessageId(focusMessages, options.lane);
+  const pendingIntentContext = await getLatestPendingIntentForLane(
+    options.concern.guildId,
+    options.concern.channelId,
+    options.lane.laneKey,
+  );
+  const memory = await retrieveProfileMemory(
+    options.runtime.guildId,
+    options.runtime.visibleMessages,
+    {
+      focusUserId: options.concern.focusAuthorId,
+    },
+  );
 
-  const snapshot = {
+  const visibleMessages = options.compact
+    ? options.runtime.visibleMessages.slice(-6)
+    : options.runtime.visibleMessages.slice(-12);
+
+  const snapshot: ResponseSnapshot = {
     id: randomUUID(),
-    guildId: runtime.guildId,
-    channelId: runtime.channelId,
+    concernId: options.concern.id,
+    laneKey: options.lane.laneKey,
+    guildId: options.runtime.guildId,
+    channelId: options.runtime.channelId,
     createdAt: new Date().toISOString(),
-    anchorMessageId: attentionDecision.targetMessageId,
-    visibleMessages: runtime.visibleMessages.slice(-12),
-    pendingIntent: runtime.pendingIntent,
+    anchorMessageId,
+    focusAuthorId: options.concern.focusAuthorId,
+    focusMessages,
+    visibleMessages,
+    pendingIntentContext,
+    pendingIntent: pendingIntentContext,
     memory,
-    attentionDecision,
+    attentionDecision: {
+      shouldRespond: true,
+      reason: toAttentionReason(options.concern.reasonCode),
+      targetMessageId: anchorMessageId,
+      opportunismScore: 1,
+    },
   };
 
   frankDebug("snapshot", "built", {
     ...summarizeSnapshot(snapshot),
+    focusMessages: summarizeMessages(focusMessages, 4),
     visibleChat: summarizeMessages(snapshot.visibleMessages),
+    compact: Boolean(options.compact),
+    attentionMode: options.settings.attentionMode,
   });
 
   return snapshot;

@@ -18,12 +18,19 @@ function renderMemory(snapshot: ResponseSnapshot) {
 }
 
 function renderPendingIntent(snapshot: ResponseSnapshot) {
-  if (!snapshot.pendingIntent || snapshot.pendingIntent.remainingChunks.length === 0) {
+  const pendingIntent = snapshot.pendingIntentContext ?? snapshot.pendingIntent;
+  if (!pendingIntent || pendingIntent.remainingChunks.length === 0) {
     return "No interrupted thought to resume.";
   }
 
-  return snapshot.pendingIntent.remainingChunks
+  return pendingIntent.remainingChunks
     .map((chunk) => `- ${chunk}`)
+    .join("\n");
+}
+
+function renderFocusMessages(snapshot: ResponseSnapshot) {
+  return (snapshot.focusMessages ?? [])
+    .map((message) => renderVisibleMessage(message, snapshot.visibleMessages))
     .join("\n");
 }
 
@@ -96,7 +103,7 @@ Frank and knowledge:
 
 Rules:
 - Return a JSON object only.
-- Plan 1 to 5 Discord messages in order.
+- Plan 1 to 8 Discord messages in order.
 - Most replies should be 1 to 3 messages.
 - Each chunk should feel like a real text burst, not a paragraph essay.
 - The first chunk should usually either answer, react, or frame the real point immediately.
@@ -115,7 +122,14 @@ Rules:
 }
 
 export function buildCharacterUserPrompt(snapshot: ResponseSnapshot) {
-  return `Attention reason: ${snapshot.attentionDecision.reason}
+  return `Concern reason: ${snapshot.attentionDecision.reason}
+
+Current asks:
+${renderFocusMessages(snapshot)}
+
+Reply anchor:
+- Frank should visibly reply to message id: ${snapshot.anchorMessageId ?? "none"}
+- The reply target is separate from the broader concern set above.
 
 Relevant profile memory:
 ${renderMemory(snapshot)}
