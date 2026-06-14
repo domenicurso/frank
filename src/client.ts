@@ -14,7 +14,10 @@ export const client = new Client({
     GatewayIntentBits.MessageContent,
   ],
   partials: [
+    Partials.Channel,
     Partials.Message,
+    Partials.Reaction,
+    Partials.User,
   ],
 });
 

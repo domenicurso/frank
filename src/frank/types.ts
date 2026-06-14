@@ -47,6 +47,7 @@ export type ConcernReasonCode =
   | "reply_to_bot"
   | "continuation"
   | "bare_summon"
+  | "reaction_added"
   | "message_edited"
   | "message_deleted";
 
@@ -122,6 +123,9 @@ export type DiscordEvent =
       channelId: string;
       messageId: string;
       authorId: string | null;
+      authorName?: string | null;
+      authorUsername?: string | null;
+      content?: string | null;
       deletedAt: string;
     }
   | {
@@ -131,6 +135,8 @@ export type DiscordEvent =
       channelId: string;
       messageId: string;
       userId: string;
+      userName: string;
+      userUsername: string;
       emoji: string;
       createdAt: string;
     };
@@ -182,6 +188,14 @@ export type SystemEvent =
 
 export type PersistedEvent = DiscordEvent | SystemEvent;
 
+export type VisibleReaction = {
+  userId: string;
+  userName: string;
+  userUsername: string;
+  emoji: string;
+  createdAt: string;
+};
+
 export type VisibleMessage = {
   id: string;
   authorId: string;
@@ -203,9 +217,41 @@ export type VisibleMessage = {
     content: string;
   } | null;
   attachments?: Array<{ name: string; contentType: string; url: string }>;
+  reactions?: VisibleReaction[];
+  lastEdit?: {
+    oldContent: string | null;
+    editedAt: string;
+  } | null;
   createdAt: string;
   fromBot: boolean;
 };
+
+export type SnapshotFocusEvent =
+  | {
+      type: "message_update";
+      messageId: string;
+      oldContent: string | null;
+      newContent: string;
+      editedAt: string;
+    }
+  | {
+      type: "message_delete";
+      messageId: string;
+      authorId: string | null;
+      authorName: string | null;
+      authorUsername: string | null;
+      content: string | null;
+      deletedAt: string;
+    }
+  | {
+      type: "reaction_add";
+      messageId: string;
+      userId: string;
+      userName: string;
+      userUsername: string;
+      emoji: string;
+      createdAt: string;
+    };
 
 export type PendingIntentContext = {
   snapshotId: string;
@@ -392,6 +438,7 @@ export type ConcernSnapshot = {
   anchorMessageId: string | null;
   focusAuthorId?: string;
   focusMessages?: VisibleMessage[];
+  focusEvents?: SnapshotFocusEvent[];
   visibleMessages: VisibleMessage[];
   pendingIntentContext?: PendingIntentContext | null;
   pendingIntent: PendingIntentContext | null;

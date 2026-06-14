@@ -714,23 +714,39 @@ export async function getQueuedConcernForLane(
   return record ? toConcern(record) : null;
 }
 
-export async function listOpenConcernsForMessage(
+export async function listRelevantConcernsForMessage(
   guildId: string,
   channelId: string,
   messageId: string,
+  options: {
+    includeSent?: boolean;
+  } = {},
 ) {
   const records = await FrankConcernRecord.findAll({
     where: {
       guildId,
       channelId,
-      status: { [Op.in]: OPEN_CONCERN_STATUSES },
+      status: {
+        [Op.in]: options.includeSent
+          ? [...OPEN_CONCERN_STATUSES, "sent"]
+          : OPEN_CONCERN_STATUSES,
+      },
     },
     order: [["updatedAt", "DESC"]],
   });
 
-  return records
+  const concerns = records
     .map(toConcern)
     .filter((concern) => concern.sourceMessageIds.includes(messageId));
+  const latestByLane = new Map<LaneKey, Concern>();
+
+  for (const concern of concerns) {
+    if (!latestByLane.has(concern.laneKey)) {
+      latestByLane.set(concern.laneKey, concern);
+    }
+  }
+
+  return [...latestByLane.values()];
 }
 
 export async function createTurn(input: {
@@ -804,6 +820,7 @@ export async function getLatestPendingIntentForLane(
       channelId,
       laneKey,
       status: { [Op.in]: ["aborted", "failed", "sent", ...ACTIVE_TURN_STATUSES] },
+      pendingIntentContext: { [Op.ne]: null },
     },
     order: [["updatedAt", "DESC"]],
   });

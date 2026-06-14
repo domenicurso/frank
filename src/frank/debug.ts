@@ -8,13 +8,13 @@ const FRANK_DEBUG_ENABLED =
   debugFlag === "yes" ||
   debugFlag === "on";
 
-function truncateString(value: string, max = 280) {
+function truncateString(value: string, max = 320) {
   if (value.length <= max) return value;
   return `${value.slice(0, max)}...<truncated ${value.length - max} chars>`;
 }
 
 function sanitize(value: unknown, depth = 0): unknown {
-  if (depth > 4) return "<max-depth>";
+  if (depth > 6) return "<max-depth>";
   if (value == null) return value;
 
   if (typeof value === "string") {
@@ -38,7 +38,7 @@ function sanitize(value: unknown, depth = 0): unknown {
   }
 
   if (Array.isArray(value)) {
-    return value.slice(0, 12).map((item) => sanitize(item, depth + 1));
+    return value.map((item) => sanitize(item, depth + 1));
   }
 
   if (typeof value === "object") {

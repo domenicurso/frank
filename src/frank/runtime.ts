@@ -3,6 +3,7 @@ import type {
   ChannelRuntimeProjection,
   DiscordEvent,
   ResponseSnapshot,
+  VisibleReaction,
   VisibleMessage,
 } from "@/frank/types";
 
@@ -30,9 +31,37 @@ export function toVisibleMessage(event: Extract<DiscordEvent, { type: "message_c
       contentType: attachment.contentType,
       url: attachment.url,
     })),
+    reactions: [],
+    lastEdit: null,
     createdAt: event.createdAt,
     fromBot: false,
   };
+}
+
+function appendVisibleReaction(
+  reactions: VisibleReaction[] | undefined,
+  event: Extract<DiscordEvent, { type: "reaction_add" }>,
+) {
+  const nextReactions = reactions ? [...reactions] : [];
+  const existingIndex = nextReactions.findIndex(
+    (reaction) =>
+      reaction.userId === event.userId && reaction.emoji === event.emoji,
+  );
+  const nextReaction: VisibleReaction = {
+    userId: event.userId,
+    userName: event.userName,
+    userUsername: event.userUsername,
+    emoji: event.emoji,
+    createdAt: event.createdAt,
+  };
+
+  if (existingIndex >= 0) {
+    nextReactions.splice(existingIndex, 1, nextReaction);
+    return nextReactions;
+  }
+
+  nextReactions.push(nextReaction);
+  return nextReactions.slice(-8);
 }
 
 export function applyDiscordEventToRuntime(
@@ -61,7 +90,14 @@ export function applyDiscordEventToRuntime(
   if (event.type === "message_update") {
     next.visibleMessages = next.visibleMessages.map((message) =>
       message.id === event.messageId
-        ? { ...message, content: event.newContent }
+        ? {
+            ...message,
+            content: event.newContent,
+            lastEdit: {
+              oldContent: event.oldContent,
+              editedAt: event.editedAt,
+            },
+          }
         : message,
     );
   }
@@ -73,6 +109,18 @@ export function applyDiscordEventToRuntime(
     if (next.lastBotMessageId === event.messageId) {
       next.lastBotMessageId = null;
     }
+  }
+
+  if (event.type === "reaction_add") {
+    next.visibleMessages = next.visibleMessages.map((message) =>
+      message.id === event.messageId
+        ? {
+            ...message,
+            reactions: appendVisibleReaction(message.reactions, event),
+          }
+        : message,
+    );
+    next.lastHumanMessageAt = event.createdAt;
   }
 
   return next;
@@ -102,6 +150,8 @@ export function markBurstSent(
       replyToMessageId: null,
       replyPreview: null,
       attachments: [],
+      reactions: [],
+      lastEdit: null,
       createdAt: message.createdAt,
       fromBot: true,
     })),

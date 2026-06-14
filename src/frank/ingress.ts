@@ -13,6 +13,14 @@ import type {
   User,
 } from "discord.js";
 
+async function hydrateMessage<T extends Message | PartialMessage>(message: T) {
+  if (!message.partial) {
+    return message;
+  }
+
+  return message.fetch().catch(() => message);
+}
+
 function normalizeWords(input: string) {
   const words: string[] = [];
   let current = "";
@@ -218,37 +226,45 @@ export async function ingestMessageUpdate(
   oldMessage: Message | PartialMessage,
   newMessage: Message | PartialMessage,
 ) {
-  if (!newMessage.guild || !newMessage.channel?.isTextBased()) return;
+  const resolvedNewMessage = await hydrateMessage(newMessage);
+  if (!resolvedNewMessage.guild || !resolvedNewMessage.channel?.isTextBased()) {
+    return;
+  }
   if (
-    !(await isFrankChannelAllowed(newMessage.guild.id, newMessage.channel.id))
+    !(
+      await isFrankChannelAllowed(
+        resolvedNewMessage.guild.id,
+        resolvedNewMessage.channel.id,
+      )
+    )
   ) {
     return;
   }
 
   const event: DiscordEvent = {
     type: "message_update",
-    eventKey: `message_update:${newMessage.id}:${Date.now()}`,
-    guildId: newMessage.guild.id,
-    channelId: newMessage.channel.id,
-    messageId: newMessage.id,
+    eventKey: `message_update:${resolvedNewMessage.id}:${Date.now()}`,
+    guildId: resolvedNewMessage.guild.id,
+    channelId: resolvedNewMessage.channel.id,
+    messageId: resolvedNewMessage.id,
     oldContent: "content" in oldMessage ? oldMessage.content ?? null : null,
-    newContent: newMessage.content ?? "",
+    newContent: resolvedNewMessage.content ?? "",
     editedAt: new Date().toISOString(),
   };
 
   frankDebug("ingress", "message_update.input", {
-    guildId: newMessage.guild.id,
-    channelId: newMessage.channel.id,
-    messageId: newMessage.id,
+    guildId: resolvedNewMessage.guild.id,
+    channelId: resolvedNewMessage.channel.id,
+    messageId: resolvedNewMessage.id,
     oldContent: "content" in oldMessage ? oldMessage.content ?? null : null,
-    newContent: newMessage.content ?? "",
+    newContent: resolvedNewMessage.content ?? "",
   });
 
   const eventId = await appendFrankEvent(event);
   await upsertLaneWork("lane_update", { eventId }, {
     dedupeKey: `lane-update:${eventId}`,
-    guildId: newMessage.guild.id,
-    channelId: newMessage.channel.id,
+    guildId: resolvedNewMessage.guild.id,
+    channelId: resolvedNewMessage.channel.id,
     availableAt: new Date(),
   });
 
@@ -256,31 +272,47 @@ export async function ingestMessageUpdate(
 }
 
 export async function ingestMessageDelete(message: Message | PartialMessage) {
-  if (!message.guild || !message.channel?.isTextBased()) return;
-  if (!(await isFrankChannelAllowed(message.guild.id, message.channel.id))) return;
+  const resolvedMessage = await hydrateMessage(message);
+  if (!resolvedMessage.guild || !resolvedMessage.channel?.isTextBased()) return;
+  if (
+    !(await isFrankChannelAllowed(
+      resolvedMessage.guild.id,
+      resolvedMessage.channel.id,
+    ))
+  ) {
+    return;
+  }
 
   const event: DiscordEvent = {
     type: "message_delete",
-    eventKey: `message_delete:${message.id}:${Date.now()}`,
-    guildId: message.guild.id,
-    channelId: message.channel.id,
-    messageId: message.id,
-    authorId: message.author?.id ?? null,
+    eventKey: `message_delete:${resolvedMessage.id}:${Date.now()}`,
+    guildId: resolvedMessage.guild.id,
+    channelId: resolvedMessage.channel.id,
+    messageId: resolvedMessage.id,
+    authorId: resolvedMessage.author?.id ?? null,
+    authorName:
+      resolvedMessage.member?.displayName ??
+      resolvedMessage.author?.globalName ??
+      resolvedMessage.author?.username ??
+      null,
+    authorUsername: resolvedMessage.author?.username ?? null,
+    content: resolvedMessage.content ?? null,
     deletedAt: new Date().toISOString(),
   };
 
   frankDebug("ingress", "message_delete.input", {
-    guildId: message.guild.id,
-    channelId: message.channel.id,
-    messageId: message.id,
-    authorId: message.author?.id ?? null,
+    guildId: resolvedMessage.guild.id,
+    channelId: resolvedMessage.channel.id,
+    messageId: resolvedMessage.id,
+    authorId: resolvedMessage.author?.id ?? null,
+    content: resolvedMessage.content ?? null,
   });
 
   const eventId = await appendFrankEvent(event);
   await upsertLaneWork("lane_update", { eventId }, {
     dedupeKey: `lane-update:${eventId}`,
-    guildId: message.guild.id,
-    channelId: message.channel.id,
+    guildId: resolvedMessage.guild.id,
+    channelId: resolvedMessage.channel.id,
     availableAt: new Date(),
   });
 
@@ -291,18 +323,32 @@ export async function ingestReactionAdd(
   reaction: MessageReaction | PartialMessageReaction,
   user: User | PartialUser,
 ) {
-  const message = reaction.message;
-  if (!message.guild || !message.channel?.isTextBased() || user.bot) return;
+  const resolvedReaction = reaction.partial
+    ? await reaction.fetch().catch(() => reaction)
+    : reaction;
+  const message = await hydrateMessage(resolvedReaction.message);
+  const resolvedUser =
+    "partial" in user && user.partial
+      ? await user.fetch().catch(() => user)
+      : user;
+
+  if (!message.guild || !message.channel?.isTextBased() || resolvedUser.bot) return;
   if (!(await isFrankChannelAllowed(message.guild.id, message.channel.id))) return;
 
   const event: DiscordEvent = {
     type: "reaction_add",
-    eventKey: `reaction_add:${message.id}:${user.id}:${Date.now()}`,
+    eventKey: `reaction_add:${message.id}:${resolvedUser.id}:${Date.now()}`,
     guildId: message.guild.id,
     channelId: message.channel.id,
     messageId: message.id,
-    userId: user.id,
-    emoji: reaction.emoji.name ?? reaction.emoji.toString(),
+    userId: resolvedUser.id,
+    userName:
+      message.guild.members.cache.get(resolvedUser.id)?.displayName ||
+      resolvedUser.globalName ||
+      resolvedUser.username ||
+      resolvedUser.id,
+    userUsername: resolvedUser.username || resolvedUser.id,
+    emoji: resolvedReaction.emoji.name ?? resolvedReaction.emoji.toString(),
     createdAt: new Date().toISOString(),
   };
 
@@ -310,7 +356,8 @@ export async function ingestReactionAdd(
     guildId: message.guild.id,
     channelId: message.channel.id,
     messageId: message.id,
-    userId: user.id,
+    userId: resolvedUser.id,
+    userName: event.userName,
     emoji: event.emoji,
   });
 

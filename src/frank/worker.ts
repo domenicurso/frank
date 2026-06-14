@@ -43,7 +43,7 @@ import {
   getQueuedConcernForLane,
   getTurn,
   listOpenConcernsForLane,
-  listOpenConcernsForMessage,
+  listRelevantConcernsForMessage,
   reconcileLaneRuntime,
   recordLaneSent,
   requeueExpiredLeases,
@@ -183,6 +183,17 @@ function shouldRetryConcern(reason: InvalidationReason | undefined) {
   ].includes(reason ?? "channel_shift");
 }
 
+function shouldRetryEmptyGenerationResult(options: {
+  plan: { chunks: Array<{ text: string }>; reactionEmoji?: string | null } | null;
+  sentMessageCount: number;
+}) {
+  return (
+    options.sentMessageCount === 0 &&
+    (options.plan?.chunks.length ?? 0) === 0 &&
+    !options.plan?.reactionEmoji
+  );
+}
+
 function shouldPreemptActiveConcern(options: {
   lane: ConversationLane;
   activeConcern: Concern;
@@ -210,7 +221,11 @@ function shouldPreemptActiveConcern(options: {
 }
 
 function shouldCarryPendingIntent(reason: InvalidationReason | undefined) {
-  return reason === "worker_timeout" || reason === "manual_abort";
+  return ![
+    "message_deleted",
+    "message_edited",
+    "worker_shutdown",
+  ].includes(reason ?? "channel_shift");
 }
 
 function getSettleDelayMs(
@@ -301,7 +316,7 @@ async function enqueueLaneGenerate(
       channelId: concern.channelId,
       laneKey: lane.laneKey,
       concernId: concern.id,
-      dedupeKey: `generate:${concern.id}`,
+      dedupeKey: `generate:${concern.id}:attempt:${concern.attemptCount}`,
       availableAt,
     },
   );
@@ -605,10 +620,11 @@ async function handleMessageCreateConcern(
 async function handleConcernMutation(
   event: Extract<DiscordEvent, { type: "message_update" | "message_delete" }>,
 ) {
-  const concerns = await listOpenConcernsForMessage(
+  const concerns = await listRelevantConcernsForMessage(
     event.guildId,
     event.channelId,
     event.messageId,
+    { includeSent: event.type === "message_update" },
   );
 
   for (const concern of concerns) {
@@ -623,36 +639,6 @@ async function handleConcernMutation(
             (messageId) => messageId !== event.messageId,
           )
         : [...concern.sourceMessageIds];
-
-    if (remainingMessageIds.length === 0) {
-      await updateConcern(concern.id, {
-        status: "cancelled",
-        reasonCode:
-          event.type === "message_delete"
-            ? "message_deleted"
-            : "message_edited",
-      });
-      await cancelLaneWorkForConcern(concern.id);
-      interruptLaneExecution(
-        lane.laneKey,
-        event.type === "message_delete" ? "message_deleted" : "message_edited",
-      );
-
-      if (lane.activeConcernId === concern.id) {
-        await upsertLane({
-          guildId: lane.guildId,
-          channelId: lane.channelId,
-          laneKey: lane.laneKey,
-          authorId: lane.authorId,
-          replyRootMessageId: lane.replyRootMessageId,
-          status: "idle",
-          activeConcernId: null,
-          activeTurnId: null,
-        });
-        await queueFollowup(lane);
-      }
-      continue;
-    }
 
     const successor = await createConcern({
       guildId: concern.guildId,
@@ -669,6 +655,65 @@ async function handleConcernMutation(
       reasonCode:
         event.type === "message_delete" ? "message_deleted" : "message_edited",
     });
+
+    if (remainingMessageIds.length === 0) {
+      if (concern.status === "sent") {
+        await updateConcern(concern.id, {
+          supersededByConcernId: successor.id,
+        });
+        if (lane.status === "idle" && !lane.activeConcernId) {
+          await activateConcern(
+            lane,
+            successor,
+            event.type === "message_delete" ? event.deletedAt : event.editedAt,
+            new Date(),
+          );
+        } else {
+          await queueFollowup(lane);
+        }
+        continue;
+      }
+
+      await updateConcern(concern.id, {
+        status: "cancelled",
+        supersededByConcernId: successor.id,
+        reasonCode:
+          event.type === "message_delete"
+            ? "message_deleted"
+            : "message_edited",
+      });
+      await cancelLaneWorkForConcern(concern.id);
+      interruptLaneExecution(
+        lane.laneKey,
+        event.type === "message_delete" ? "message_deleted" : "message_edited",
+      );
+
+      if (lane.activeConcernId === concern.id) {
+        const nextLane = await upsertLane({
+          guildId: lane.guildId,
+          channelId: lane.channelId,
+          laneKey: lane.laneKey,
+          authorId: lane.authorId,
+          replyRootMessageId: lane.replyRootMessageId,
+          status: "queued",
+          activeConcernId: successor.id,
+          activeTurnId: null,
+        });
+        await enqueueLaneGenerate(successor, nextLane, new Date());
+      } else {
+        await queueFollowup(lane);
+      }
+      continue;
+    }
+
+    if (concern.status === "sent") {
+      await updateConcern(concern.id, {
+        supersededByConcernId: successor.id,
+      });
+      await queueFollowup(lane);
+      continue;
+    }
+
     await updateConcern(concern.id, {
       status: "cancelled",
       supersededByConcernId: successor.id,
@@ -696,6 +741,98 @@ async function handleConcernMutation(
     } else {
       await queueFollowup(lane);
     }
+  }
+}
+
+async function handleReactionAddConcern(
+  event: Extract<DiscordEvent, { type: "reaction_add" }>,
+) {
+  const concerns = await listRelevantConcernsForMessage(
+    event.guildId,
+    event.channelId,
+    event.messageId,
+    { includeSent: true },
+  );
+
+  if (concerns.length === 0) {
+    const runtime = await getChannelRuntime(event.guildId, event.channelId);
+    const targetMessage = runtime.visibleMessages.find(
+      (message) => message.id === event.messageId,
+    );
+    if (!targetMessage?.fromBot) {
+      return;
+    }
+
+    const existingLane = await getDefaultRelevantLaneForAuthor(
+      event.guildId,
+      event.channelId,
+      event.userId,
+    );
+    const lane = await upsertLane({
+      guildId: event.guildId,
+      channelId: event.channelId,
+      laneKey: existingLane?.laneKey ?? sameAuthorLaneKey(event.userId),
+      authorId: event.userId,
+      replyRootMessageId: existingLane?.replyRootMessageId ?? null,
+      status: existingLane?.status ?? "idle",
+      activeConcernId: existingLane?.activeConcernId ?? null,
+      activeTurnId: existingLane?.activeTurnId ?? null,
+      lastHumanActivityAt: event.createdAt,
+    });
+    const concern = await createConcern({
+      guildId: event.guildId,
+      channelId: event.channelId,
+      laneKey: lane.laneKey,
+      sourceEventIds: [event.eventKey],
+      sourceMessageIds: [event.messageId],
+      focusAuthorId: event.userId,
+      anchorMessageId: event.messageId,
+      status: "queued",
+      reasonCode: "reaction_added",
+    });
+
+    if (!lane.activeConcernId || lane.status === "idle") {
+      await activateConcern(lane, concern, event.createdAt, new Date());
+    } else {
+      await queueFollowup(lane);
+    }
+    return;
+  }
+
+  for (const concern of concerns) {
+    const lane = await getLane(event.guildId, event.channelId, concern.laneKey);
+    if (!lane) {
+      continue;
+    }
+
+    const successor = await createConcern({
+      guildId: concern.guildId,
+      channelId: concern.channelId,
+      laneKey: concern.laneKey,
+      sourceEventIds: appendUnique(concern.sourceEventIds, event.eventKey),
+      sourceMessageIds:
+        concern.sourceMessageIds.length > 0
+          ? concern.sourceMessageIds
+          : [event.messageId],
+      focusAuthorId: event.userId,
+      anchorMessageId: concern.anchorMessageId ?? event.messageId,
+      status: "queued",
+      reasonCode: "reaction_added",
+    });
+
+    if (concern.status === "sent") {
+      await updateConcern(concern.id, {
+        supersededByConcernId: successor.id,
+      });
+      if (lane.status === "idle" && !lane.activeConcernId) {
+        await activateConcern(lane, successor, event.createdAt, new Date());
+      } else {
+        await queueFollowup(lane);
+      }
+      continue;
+    }
+
+    await queueFollowup(lane);
   }
 }
 
@@ -885,6 +1022,8 @@ async function handleLaneUpdate(
     lastHumanMessageAt:
       event.type === "message_create"
         ? event.createdAt
+        : event.type === "reaction_add"
+          ? event.createdAt
         : control.lastHumanMessageAt,
   };
   await saveChannelControl(nextControl);
@@ -896,6 +1035,8 @@ async function handleLaneUpdate(
     event.type === "message_delete"
   ) {
     await handleConcernMutation(event);
+  } else if (event.type === "reaction_add") {
+    await handleReactionAddConcern(event);
   }
 
   frankDebug("worker", "lane_update.output", {
@@ -1112,7 +1253,11 @@ async function handleLaneGenerate(
     throw error;
   });
 
-  if (result.plan) {
+  if (
+    result.plan &&
+    !result.aborted &&
+    (result.plan.chunks.length > 0 || Boolean(result.plan.reactionEmoji))
+  ) {
     const event: SystemEvent = {
       type: "burst_generated",
       eventKey: `burst_generated:${snapshot.id}`,
@@ -1228,6 +1373,43 @@ async function handleLaneGenerate(
     };
     await appendFrankEvent(event);
     return;
+  }
+
+  if (
+    shouldRetryEmptyGenerationResult({
+      plan: result.plan,
+      sentMessageCount: result.sentMessageIds.length,
+    })
+  ) {
+    const freshConcern = await getConcern(concern.id);
+    if (freshConcern && freshConcern.attemptCount < 1) {
+      await updateTurn(turn.id, {
+        status: "failed",
+        plannedChunks: result.plan?.chunks ?? [],
+        sentChunkCount: 0,
+        pendingIntentContext: null,
+      });
+      await updateConcern(freshConcern.id, {
+        status: "queued",
+        attemptCount: freshConcern.attemptCount + 1,
+      });
+      await upsertLane({
+        guildId: lane.guildId,
+        channelId: lane.channelId,
+        laneKey: lane.laneKey,
+        authorId: lane.authorId,
+        replyRootMessageId: lane.replyRootMessageId,
+        status: "queued",
+        activeConcernId: freshConcern.id,
+        activeTurnId: null,
+      });
+      await enqueueLaneGenerate(
+        { ...freshConcern, attemptCount: freshConcern.attemptCount + 1 },
+        lane,
+        new Date(),
+      );
+      return;
+    }
   }
 
   const sentAt = new Date().toISOString();

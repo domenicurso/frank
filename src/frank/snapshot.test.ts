@@ -5,6 +5,7 @@ import {
   chooseAnchorMessageId,
   isBareSummonContent,
   resolveFocusMessages,
+  toSnapshotFocusEvents,
 } from "@/frank/snapshot";
 import type {
   ChannelRuntimeProjection,
@@ -40,6 +41,8 @@ function makeMessage(overrides: Partial<VisibleMessage> = {}): VisibleMessage {
     mentionedUsers: overrides.mentionedUsers ?? [],
     mentionedChannels: overrides.mentionedChannels ?? [],
     attachments: overrides.attachments ?? [],
+    reactions: overrides.reactions ?? [],
+    lastEdit: overrides.lastEdit ?? null,
     createdAt: overrides.createdAt ?? "2026-06-13T23:00:00.000Z",
     fromBot: overrides.fromBot ?? false,
   };
@@ -181,6 +184,7 @@ describe("snapshot concern focus", () => {
 
     expect(snapshot).not.toBeNull();
     expect(snapshot?.visibleMessages.map((message) => message.id)).toEqual([
+      "m1",
       "m2",
       "m3",
       "m4",
@@ -190,6 +194,52 @@ describe("snapshot concern focus", () => {
       "m8",
       "m9",
       "m10",
+    ]);
+  });
+
+  test("maps mutation events into snapshot focus events", () => {
+    expect(
+      toSnapshotFocusEvents([
+        {
+          type: "message_update",
+          eventKey: "e1",
+          guildId: "guild",
+          channelId: "channel",
+          messageId: "m1",
+          oldContent: "2+4",
+          newContent: "2*4",
+          editedAt: "2026-06-14T00:00:01.000Z",
+        },
+        {
+          type: "reaction_add",
+          eventKey: "e2",
+          guildId: "guild",
+          channelId: "channel",
+          messageId: "m1",
+          userId: "user-2",
+          userName: "Sam",
+          userUsername: "sam",
+          emoji: "😂",
+          createdAt: "2026-06-14T00:00:02.000Z",
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "message_update",
+        messageId: "m1",
+        oldContent: "2+4",
+        newContent: "2*4",
+        editedAt: "2026-06-14T00:00:01.000Z",
+      },
+      {
+        type: "reaction_add",
+        messageId: "m1",
+        userId: "user-2",
+        userName: "Sam",
+        userUsername: "sam",
+        emoji: "😂",
+        createdAt: "2026-06-14T00:00:02.000Z",
+      },
     ]);
   });
 });

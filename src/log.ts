@@ -33,7 +33,7 @@ function formatPayload(payload: unknown) {
     depth: 6,
     breakLength: 100,
     sorted: true,
-    maxArrayLength: 12,
+    // maxArrayLength: 12,
     maxStringLength: 320,
   })
     .split("\n")

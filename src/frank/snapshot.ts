@@ -2,12 +2,14 @@ import { frankDebug } from "@/frank/debug";
 import { summarizeMessages, summarizeSnapshot } from "@/frank/debugView";
 import { retrieveProfileMemory } from "@/frank/memory";
 import { getLatestPendingIntentForLane } from "@/frank/queueStore";
+import { listFrankEventsByKeys } from "@/frank/store";
 import type {
   ChannelRuntimeProjection,
   Concern,
   ConversationLane,
   FrankGuildSettings,
   ResponseSnapshot,
+  SnapshotFocusEvent,
   VisibleMessage,
 } from "@/frank/types";
 import { randomUUID } from "node:crypto";
@@ -51,6 +53,46 @@ export function resolveFocusMessages(
   return concern.sourceMessageIds
     .map((messageId) => byId.get(messageId))
     .filter((message): message is VisibleMessage => Boolean(message));
+}
+
+export function toSnapshotFocusEvents(events: Awaited<ReturnType<typeof listFrankEventsByKeys>>) {
+  return events.flatMap((event): SnapshotFocusEvent[] => {
+    if (event.type === "message_update") {
+      return [{
+        type: "message_update",
+        messageId: event.messageId,
+        oldContent: event.oldContent,
+        newContent: event.newContent,
+        editedAt: event.editedAt,
+      }];
+    }
+
+    if (event.type === "message_delete") {
+      return [{
+        type: "message_delete",
+        messageId: event.messageId,
+        authorId: event.authorId,
+        authorName: event.authorName ?? null,
+        authorUsername: event.authorUsername ?? null,
+        content: event.content ?? null,
+        deletedAt: event.deletedAt,
+      }];
+    }
+
+    if (event.type === "reaction_add") {
+      return [{
+        type: "reaction_add",
+        messageId: event.messageId,
+        userId: event.userId,
+        userName: event.userName,
+        userUsername: event.userUsername,
+        emoji: event.emoji,
+        createdAt: event.createdAt,
+      }];
+    }
+
+    return [];
+  });
 }
 
 function buildVisibleMessages(
@@ -131,6 +173,7 @@ function toAttentionReason(reasonCode: Concern["reasonCode"]) {
   switch (reasonCode) {
     case "bare_summon":
       return "direct_mention" as const;
+    case "reaction_added":
     case "message_deleted":
     case "message_edited":
       return "continuation" as const;
@@ -147,7 +190,11 @@ export async function buildResponseSnapshot(options: {
   compact?: boolean;
 }) {
   const focusMessages = resolveFocusMessages(options.runtime, options.concern);
-  if (focusMessages.length === 0) {
+  const focusEvents = toSnapshotFocusEvents(
+    await listFrankEventsByKeys(options.concern.sourceEventIds),
+  );
+
+  if (focusMessages.length === 0 && focusEvents.length === 0) {
     frankDebug("snapshot", "skipped", {
       channelId: options.runtime.channelId,
       laneKey: options.lane.laneKey,
@@ -157,7 +204,10 @@ export async function buildResponseSnapshot(options: {
     return null;
   }
 
-  const anchorMessageId = chooseAnchorMessageId(focusMessages, options.lane);
+  const anchorMessageId =
+    focusMessages.length > 0
+      ? chooseAnchorMessageId(focusMessages, options.lane)
+      : null;
   const pendingIntentContext = await getLatestPendingIntentForLane(
     options.concern.guildId,
     options.concern.channelId,
@@ -187,6 +237,7 @@ export async function buildResponseSnapshot(options: {
     anchorMessageId,
     focusAuthorId: options.concern.focusAuthorId,
     focusMessages,
+    focusEvents,
     visibleMessages,
     pendingIntentContext,
     pendingIntent: pendingIntentContext,

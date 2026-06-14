@@ -53,10 +53,12 @@ export function collectHumanizedChannels(messages: VisibleMessage[]) {
   );
 }
 
-export function humanizeDiscordContent(message: Pick<
-  VisibleMessage,
-  "content" | "mentionedUsers" | "mentionedChannels"
->) {
+export function humanizeDiscordContent(
+  message: Pick<
+    VisibleMessage,
+    "content" | "mentionedUsers" | "mentionedChannels"
+  >,
+) {
   let content = message.content;
 
   for (const user of message.mentionedUsers ?? []) {
@@ -86,8 +88,9 @@ function resolveReplyContext(
   }
 
   const resolved =
-    visibleMessages.find((candidate) => candidate.id === message.replyToMessageId) ??
-    null;
+    visibleMessages.find(
+      (candidate) => candidate.id === message.replyToMessageId,
+    ) ?? null;
 
   if (resolved) {
     return {
@@ -127,6 +130,35 @@ function attachmentLabel(message: VisibleMessage) {
   });
 }
 
+function reactionLabel(message: VisibleMessage) {
+  const reactions = (message.reactions ?? []).slice(-6);
+  if (reactions.length === 0) {
+    return [];
+  }
+
+  const formatted = reactions.map((reaction) => {
+    const userToken = humanizedUserToken({
+      username: reaction.userUsername,
+      displayName: reaction.userName,
+    });
+    return `${reaction.emoji} ${userToken}`;
+  });
+
+  return [`+ reactions: ${formatted.join(", ")}`];
+}
+
+function editLabel(message: VisibleMessage) {
+  if (!message.lastEdit) {
+    return [];
+  }
+
+  const previous = truncate(
+    message.lastEdit.oldContent?.trim() || "<empty>",
+    56,
+  );
+  return [`+ edited: from "${previous}"`];
+}
+
 export function renderVisibleMessage(
   message: VisibleMessage,
   visibleMessages: VisibleMessage[],
@@ -148,7 +180,15 @@ export function renderVisibleMessage(
     );
   }
 
-  contextLines.push(...attachmentLabel(message).map((line) => `  ${line.trimStart()}`));
+  contextLines.push(
+    ...editLabel(message).map((line) => `  ${line.trimStart()}`),
+  );
+  contextLines.push(
+    ...attachmentLabel(message).map((line) => `  ${line.trimStart()}`),
+  );
+  contextLines.push(
+    ...reactionLabel(message).map((line) => `  ${line.trimStart()}`),
+  );
 
   if (contextLines.length === 0) {
     return `[${authorToken}] ${content}`;

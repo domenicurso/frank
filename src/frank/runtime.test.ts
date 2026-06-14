@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  applyDiscordEventToRuntime,
   markBurstInterrupted,
   releasePendingSnapshot,
 } from "@/frank/runtime";
@@ -71,5 +72,86 @@ describe("runtime interruption guards", () => {
 
     expect(next.activeSnapshotId).toBe("snapshot-2");
     expect(next.pendingIntent).toBeNull();
+  });
+
+  test("records reaction adds on visible messages", () => {
+    const runtime = makeRuntime({
+      visibleMessages: [
+        {
+          id: "message-1",
+          authorId: "user-1",
+          authorName: "Dom",
+          authorUsername: "dom",
+          content: "hello",
+          mentionsBot: false,
+          replyToMessageId: null,
+          attachments: [],
+          reactions: [],
+          lastEdit: null,
+          createdAt: "2026-06-14T01:40:00.000Z",
+          fromBot: false,
+        },
+      ],
+    });
+
+    const next = applyDiscordEventToRuntime(runtime, {
+      type: "reaction_add",
+      eventKey: "reaction_add:message-1:user-2:1",
+      guildId: "guild",
+      channelId: "channel",
+      messageId: "message-1",
+      userId: "user-2",
+      userName: "Sam",
+      userUsername: "sam",
+      emoji: "😂",
+      createdAt: "2026-06-14T01:40:05.000Z",
+    });
+
+    expect(next.visibleMessages[0]?.reactions).toEqual([
+      {
+        userId: "user-2",
+        userName: "Sam",
+        userUsername: "sam",
+        emoji: "😂",
+        createdAt: "2026-06-14T01:40:05.000Z",
+      },
+    ]);
+  });
+
+  test("tracks the last edit on visible messages", () => {
+    const runtime = makeRuntime({
+      visibleMessages: [
+        {
+          id: "message-1",
+          authorId: "user-1",
+          authorName: "Dom",
+          authorUsername: "dom",
+          content: "2+4",
+          mentionsBot: true,
+          replyToMessageId: null,
+          attachments: [],
+          reactions: [],
+          lastEdit: null,
+          createdAt: "2026-06-14T01:40:00.000Z",
+          fromBot: false,
+        },
+      ],
+    });
+
+    const next = applyDiscordEventToRuntime(runtime, {
+      type: "message_update",
+      eventKey: "message_update:message-1:1",
+      guildId: "guild",
+      channelId: "channel",
+      messageId: "message-1",
+      oldContent: "2+4",
+      newContent: "2*4",
+      editedAt: "2026-06-14T01:40:05.000Z",
+    });
+
+    expect(next.visibleMessages[0]?.lastEdit).toEqual({
+      oldContent: "2+4",
+      editedAt: "2026-06-14T01:40:05.000Z",
+    });
   });
 });

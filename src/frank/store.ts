@@ -312,6 +312,34 @@ export async function getFrankEventById(id: string): Promise<PersistedEvent | nu
   return parseJson<PersistedEvent | null>(record.payload, null);
 }
 
+export async function listFrankEventsByKeys(
+  eventKeys: string[],
+): Promise<PersistedEvent[]> {
+  if (
+    eventKeys.length === 0 ||
+    !FrankEventRecord.sequelize ||
+    !FrankEventRecord.rawAttributes
+  ) {
+    return [];
+  }
+
+  const records = await FrankEventRecord.findAll({
+    where: {
+      eventKey: { [Op.in]: eventKeys },
+    },
+  });
+  const byKey = new Map(
+    records.map((record) => [
+      record.eventKey,
+      parseJson<PersistedEvent | null>(record.payload, null),
+    ]),
+  );
+
+  return eventKeys
+    .map((eventKey) => byKey.get(eventKey) ?? null)
+    .filter((event): event is PersistedEvent => event !== null);
+}
+
 export async function listFrankEventsForChannel(
   channelId: string,
   limit: number,

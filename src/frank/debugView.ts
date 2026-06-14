@@ -52,8 +52,12 @@ export function summarizeEvent(event: PersistedEvent | null | undefined) {
       channelId: event.channelId,
       messageId: event.messageId,
       authorId: "authorId" in event ? event.authorId : null,
+      userId: "userId" in event ? event.userId : undefined,
+      emoji: "emoji" in event ? event.emoji : undefined,
       content:
-        "content" in event ? truncate(event.content, 96) : undefined,
+        "content" in event
+          ? truncate(event.content ?? "<empty>", 96)
+          : undefined,
       mentionsBot: "mentionsBot" in event ? event.mentionsBot : undefined,
       replyToMessageId:
         "replyToMessageId" in event ? event.replyToMessageId : undefined,
@@ -86,6 +90,7 @@ export function summarizeSnapshot(snapshot: ResponseSnapshot) {
     ),
     focusMessageCount: snapshot.focusMessages?.length ?? 0,
     focusChat: summarizeMessages(snapshot.focusMessages ?? []),
+    focusEventCount: snapshot.focusEvents?.length ?? 0,
     visibleMessageCount: snapshot.visibleMessages.length,
     visibleChat: summarizeMessages(snapshot.visibleMessages),
   };

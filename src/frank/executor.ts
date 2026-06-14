@@ -2,6 +2,7 @@ import { client } from "@/client";
 import { estimateTypingMs } from "@/frank/burst";
 import { createBurstPlanStream } from "@/frank/character";
 import {
+  FRANK_CHARACTER_FIRST_CHUNK_IDLE_TIMEOUT_MS,
   FRANK_CHARACTER_STREAM_IDLE_TIMEOUT_MS,
   FRANK_CHARACTER_TIMEOUT_MS,
   FRANK_STREAM_FLUSH_POLL_MS,
@@ -46,6 +47,7 @@ type ActiveExecution = {
 };
 
 const activeExecutions = new Map<string, ActiveExecution>();
+const RECENT_ANCHOR_REPLY_DISTANCE = 3;
 
 export async function sendChannelTyping(channelId: string) {
   const channel =
@@ -216,6 +218,10 @@ export async function executeStreamedBurstPlan(options: {
 
   const armStreamIdleTimer = (phase: "awaiting_first_chunk" | "awaiting_next_chunk") => {
     clearStreamIdleTimer();
+    const timeoutMs =
+      phase === "awaiting_first_chunk"
+        ? FRANK_CHARACTER_FIRST_CHUNK_IDLE_TIMEOUT_MS
+        : FRANK_CHARACTER_STREAM_IDLE_TIMEOUT_MS;
     streamIdleTimer = setTimeout(() => {
       if (signal.aborted) {
         return;
@@ -230,7 +236,7 @@ export async function executeStreamedBurstPlan(options: {
         partialChunkCount: latestPlan.chunks.length,
       });
       controller.abort("worker_timeout");
-    }, FRANK_CHARACTER_STREAM_IDLE_TIMEOUT_MS);
+    }, timeoutMs);
   };
 
   const queueChunkSend = (index: number, chunk: BurstPlan["chunks"][number]) => {
@@ -238,10 +244,16 @@ export async function executeStreamedBurstPlan(options: {
     const queuedChunk = { ...chunk };
     sendChain = sendChain.then(async () => {
       if (signal.aborted) return;
+      const isFirst = sentMessageIds.length === 0;
       await sendChunkWhenTypingBudgetMet({
         chunk: queuedChunk,
-        startedAt: chunkStartedAt.get(index) ?? Date.now(),
-        isFirst: sentMessageIds.length === 0,
+        startedAt: resolveChunkTypingStartedAt({
+          isFirst,
+          firstChunkStartedAt: chunkStartedAt.get(index) ?? null,
+          streamStartedAt,
+          now: Date.now(),
+        }),
+        isFirst,
         laneKey: options.laneKey,
         snapshot: options.snapshot,
         textChannel,
@@ -314,6 +326,18 @@ export async function executeStreamedBurstPlan(options: {
       options.maxBurstMessages,
       { abortSignal: streamAbortSignal },
     );
+    const finalPlanPromise = stream.finalPlan.catch((error) => {
+      if (
+        signal.aborted ||
+        options.abortSignal?.aborted ||
+        streamAbortSignal.aborted ||
+        isAbortLikeError(error)
+      ) {
+        return latestPlan;
+      }
+
+      throw error;
+    });
 
     armStreamIdleTimer("awaiting_first_chunk");
     await raceWithAbortSignal(
@@ -369,7 +393,7 @@ export async function executeStreamedBurstPlan(options: {
     armStreamIdleTimer(
       latestPlan.chunks.length > 0 ? "awaiting_next_chunk" : "awaiting_first_chunk",
     );
-    latestPlan = await raceWithAbortSignal(stream.finalPlan, streamAbortSignal);
+    latestPlan = await raceWithAbortSignal(finalPlanPromise, streamAbortSignal);
     clearStreamIdleTimer();
     finalPlanResolved = true;
     frankDebug("executor", "streamed_burst.final_plan", {
@@ -504,6 +528,34 @@ async function sendReply(
   return anchor.reply({ content });
 }
 
+export function shouldSendAsReply(snapshot: ResponseSnapshot) {
+  if (!snapshot.anchorMessageId) {
+    return false;
+  }
+
+  const anchorIndex = snapshot.visibleMessages.findIndex(
+    (message) => message.id === snapshot.anchorMessageId,
+  );
+  if (anchorIndex < 0) {
+    return true;
+  }
+
+  return snapshot.visibleMessages.length - anchorIndex > RECENT_ANCHOR_REPLY_DISTANCE;
+}
+
+export function resolveChunkTypingStartedAt(options: {
+  isFirst: boolean;
+  firstChunkStartedAt: number | null;
+  streamStartedAt: number;
+  now: number;
+}) {
+  if (options.isFirst) {
+    return options.firstChunkStartedAt ?? options.streamStartedAt;
+  }
+
+  return options.now;
+}
+
 function wait(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -577,6 +629,15 @@ async function sendChunkWhenTypingBudgetMet(options: {
     anchorMessageId: options.snapshot.anchorMessageId,
   });
 
+  if (!options.isFirst && remainder > 0) {
+    frankDebug("executor", "typing_indicator", {
+      channelId: options.snapshot.channelId,
+      reason: "followup_chunk",
+      snapshotId: options.snapshot.id,
+    });
+    void sendChannelTyping(options.snapshot.channelId).catch(() => undefined);
+  }
+
   if (remainder > 0) {
     await wait(remainder, options.signal);
   }
@@ -599,7 +660,9 @@ async function sendChunkWhenTypingBudgetMet(options: {
   );
 
   const sent =
-    options.isFirst && options.snapshot.anchorMessageId
+    options.isFirst &&
+    options.snapshot.anchorMessageId &&
+    shouldSendAsReply(options.snapshot)
       ? await sendReply(
           options.textChannel as unknown as TextChannel,
           options.snapshot.anchorMessageId,

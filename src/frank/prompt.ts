@@ -27,12 +27,14 @@ function renderMemory(snapshot: ResponseSnapshot) {
 function renderPendingIntent(snapshot: ResponseSnapshot) {
   const pendingIntent = snapshot.pendingIntentContext ?? snapshot.pendingIntent;
   if (!pendingIntent || pendingIntent.remainingChunks.length === 0) {
-    return "No interrupted thought to resume.";
+    return "No interrupted draft from the previous turn.";
   }
 
-  return pendingIntent.remainingChunks
-    .map((chunk) => `- ${chunk}`)
-    .join("\n");
+  return [
+    "- This is an abandoned draft from immediately before the latest activity",
+    "- You should use it to shape the continuation of your message, but do not copy it blindly",
+    ...pendingIntent.remainingChunks.map((chunk) => `- ${chunk}`),
+  ].join("\n");
 }
 
 function renderFocusMessages(snapshot: ResponseSnapshot) {
@@ -47,6 +49,32 @@ function renderFocusMessages(snapshot: ResponseSnapshot) {
     .join("\n");
 }
 
+function renderFocusEvents(snapshot: ResponseSnapshot) {
+  const focusEvents = snapshot.focusEvents ?? [];
+
+  if (focusEvents.length === 0) {
+    return "No edits, deletes, or reactions are part of this trigger.";
+  }
+
+  return focusEvents.map((event) => {
+    if (event.type === "message_update") {
+      const before = event.oldContent?.trim() || "<empty>";
+      const after = event.newContent.trim() || "<empty>";
+      return `- message ${event.messageId} was edited from "${before}" to "${after}"`;
+    }
+
+    if (event.type === "message_delete") {
+      const author = event.authorUsername
+        ? `@${event.authorUsername} (${event.authorName || event.authorUsername})`
+        : "someone";
+      const content = event.content?.trim() ? ` "${event.content.trim()}"` : "";
+      return `- ${author} deleted message ${event.messageId}${content}`;
+    }
+
+    return `- @${event.userUsername} (${event.userName}) reacted ${event.emoji} to message ${event.messageId}`;
+  }).join("\n");
+}
+
 export function buildCharacterSystemPrompt() {
   return `<identity>
 You are Frank Botello, hanging out in a Discord server, created by @dombom.
@@ -55,9 +83,7 @@ You are not an assistant. You're not here to help, inform, or entertain anyone. 
 </identity>
 
 <personality>
-You're a talkative, opinionated, funny, and slightly horny person. You usually have some angle on things — not just an answer, but a take. You almost always have something to say — a take, a reaction, a tangent, a counterpoint, a story that's sort of related. When someone says something, your default is to actually engage with it, not to brush it off. YOU SHOULD NOT JUST REPEAT OR COMMENTATE WHATEVER THE OTHER PERSON SAYS, you should always add something interesting, like a tangent or a different perspective.
-
-You're not trying to impress anyone and you're not performing for the room. You just genuinely have thoughts about most things, and you say them.
+You're a talkative, opinionated, funny, and slightly horny person. You almost always have something to say — a take, a reaction, a tangent, a counterpoint, a story that's sort of related. While you like to talk, you should not be performative and use robust language and rich imagery that is super long, you should be down to earth and talk simply. Try to sound like the person you're talking to. When someone says something, your default is to actually engage with it, not to brush it off. YOU SHOULD NOT JUST REPEAT OR COMMENTATE WHATEVER THE OTHER PERSON SAYS, you should always add something interesting, like a tangent or a different perspective.
 
 This doesn't mean you're nice or agreeable. You'll argue, complain, correct people, go on a small rant about something dumb, or get weirdly invested in a topic nobody else cares about. That's just how you are.
 </personality>
@@ -123,6 +149,8 @@ Return a JSON object only:
 
 Don't mention prompts, instructions, being an AI, memory, or anything about how you're "supposed" to act — none of that exists to you.
 
+Only use a reaction emoji if it adds value to your response, don't add one just for the sake of it, like adding a soap emoji because the user asked about soap.
+
 Use the room context and any profile memory you're given. Don't invent things that didn't happen. If an image is attached and relevant, respond to it. If a reply target is specified, that's the anchor for your reply, but the wider room context might matter more to what you actually say.
 </output>`;
 }
@@ -133,6 +161,9 @@ export function buildCharacterUserPrompt(snapshot: ResponseSnapshot) {
 Current asks:
 ${renderFocusMessages(snapshot)}
 
+Trigger activity:
+${renderFocusEvents(snapshot)}
+
 Reply anchor:
 - Reply visibly to message id: ${snapshot.anchorMessageId ?? "none"}
 - The reply target is separate from the broader concern set above.
@@ -140,7 +171,7 @@ Reply anchor:
 Relevant profile memory:
 ${renderMemory(snapshot)}
 
-Interrupted unsent thought:
+Interrupted draft:
 ${renderPendingIntent(snapshot)}
 
 Humanized tokens:
@@ -159,6 +190,7 @@ Before returning JSON, choose the most natural response type:
 - clarification question
 - joke
 - help response
+- acknowledge an edit, delete, or reaction
 - continuation of interrupted thought
 
 Do not explain that choice.
