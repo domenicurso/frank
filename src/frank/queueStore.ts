@@ -1,5 +1,9 @@
 import { sequelize } from "@/database";
-import { FRANK_CHARACTER_TIMEOUT_MS, FRANK_JOB_POLL_MS } from "@/frank/constants";
+import {
+  FRANK_CHARACTER_TIMEOUT_MS,
+  FRANK_CONTINUATION_WINDOW_MS,
+  FRANK_JOB_POLL_MS,
+} from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import { parseJson, stringifyJson } from "@/frank/json";
 import type {
@@ -1185,6 +1189,32 @@ export async function getDefaultOpenLaneForAuthor(
 ) {
   const lanes = await listOpenLanesForAuthor(guildId, channelId, authorId);
   return lanes[0] ?? null;
+}
+
+export async function getDefaultRelevantLaneForAuthor(
+  guildId: string,
+  channelId: string,
+  authorId: string,
+) {
+  const openLane = await getDefaultOpenLaneForAuthor(guildId, channelId, authorId);
+  if (openLane) {
+    return openLane;
+  }
+
+  const cutoff = new Date(Date.now() - FRANK_CONTINUATION_WINDOW_MS);
+  const records = await FrankConversationLaneRecord.findAll({
+    where: {
+      guildId,
+      channelId,
+      authorId,
+      status: "idle",
+      lastBotActivityAt: { [Op.gte]: cutoff },
+    },
+    order: [["lastBotActivityAt", "DESC"], ["updatedAt", "DESC"]],
+    limit: 3,
+  });
+
+  return records.map(toLane)[0] ?? null;
 }
 
 export async function getCurrentQueuedItemsForLane(

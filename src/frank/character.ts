@@ -32,7 +32,7 @@ const burstPlanSchema = z.object({
   reactionEmoji: z.string().max(24).nullable().optional(),
 });
 
-const MAX_MEDIA_PARTS = 4;
+const MAX_MEDIA_PARTS = 2;
 
 function inferContentType(attachment: { name: string; contentType?: string }) {
   const explicit = attachment.contentType?.toLowerCase();
@@ -51,7 +51,38 @@ function inferContentType(attachment: { name: string; contentType?: string }) {
   return "unknown";
 }
 
-function collectRecentVisualMedia(messages: VisibleMessage[]) {
+function shouldAttachVisuals(snapshot: ResponseSnapshot) {
+  const focusText = (snapshot.focusMessages ?? [])
+    .map((message) => message.content.toLowerCase())
+    .join(" ");
+
+  if (!focusText) {
+    return false;
+  }
+
+  return [
+    "image",
+    "gif",
+    "pic",
+    "picture",
+    "photo",
+    "screenshot",
+    "see",
+    "look",
+    "watch",
+    "what is this",
+  ].some((phrase) => focusText.includes(phrase));
+}
+
+function collectRecentVisualMedia(snapshot: ResponseSnapshot) {
+  if (!shouldAttachVisuals(snapshot)) {
+    return [];
+  }
+
+  const messages = snapshot.focusMessages?.length
+    ? snapshot.focusMessages
+    : snapshot.visibleMessages;
+
   const media = messages
     .flatMap((message) =>
       (message.attachments ?? []).map((attachment) => {
@@ -80,7 +111,7 @@ function collectRecentVisualMedia(messages: VisibleMessage[]) {
 
 function buildCharacterUserMessages(snapshot: ResponseSnapshot): ModelMessage[] {
   const userPrompt = buildCharacterUserPrompt(snapshot);
-  const media = collectRecentVisualMedia(snapshot.visibleMessages);
+  const media = collectRecentVisualMedia(snapshot);
   const userContent: Array<
     | { type: "text"; text: string }
     | { type: "image"; image: URL; mediaType?: string }
@@ -136,7 +167,7 @@ export function createBurstPlanStream(
     model: FRANK_CHARACTER_MODEL,
     maxBurstMessages,
     snapshot: summarizeSnapshot(snapshot),
-    attachedVisualCount: collectRecentVisualMedia(snapshot.visibleMessages).length,
+    attachedVisualCount: collectRecentVisualMedia(snapshot).length,
     systemPromptLines: systemPrompt.split("\n"),
     userPromptLines: userPrompt.split("\n"),
   });

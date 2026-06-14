@@ -134,7 +134,7 @@ export function decideAttention(
     hasRecentBotContext(runtime) &&
     latestMessage.authorId !== botUserId &&
     runtime.visibleMessages
-      .slice(-4)
+      .slice(-6)
       .some((message) => message.authorId === botUserId)
   ) {
     const decision: AttentionDecision = {
@@ -147,7 +147,7 @@ export function decideAttention(
       input: {
         latestMessageId: latestMessage.id,
         content: latestMessage.content,
-        recentVisibleMessages: runtime.visibleMessages.slice(-4),
+        recentVisibleMessages: runtime.visibleMessages.slice(-6),
       },
       decision,
     });

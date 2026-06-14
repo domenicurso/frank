@@ -53,6 +53,30 @@ export function resolveFocusMessages(
     .filter((message): message is VisibleMessage => Boolean(message));
 }
 
+function buildVisibleMessages(
+  runtime: ChannelRuntimeProjection,
+  focusMessages: VisibleMessage[],
+  compact: boolean,
+) {
+  const tailCount = compact ? 2 : 4;
+  const byId = new Map<string, VisibleMessage>();
+
+  for (const message of focusMessages) {
+    byId.set(message.id, message);
+  }
+
+  for (const message of runtime.visibleMessages.slice(-tailCount)) {
+    if (!byId.has(message.id)) {
+      byId.set(message.id, message);
+    }
+  }
+
+  return [...byId.values()].sort(
+    (left, right) =>
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime(),
+  );
+}
+
 function scoreAnchorMessage(
   message: VisibleMessage,
   index: number,
@@ -147,9 +171,11 @@ export async function buildResponseSnapshot(options: {
     },
   );
 
-  const visibleMessages = options.compact
-    ? options.runtime.visibleMessages.slice(-6)
-    : options.runtime.visibleMessages.slice(-12);
+  const visibleMessages = buildVisibleMessages(
+    options.runtime,
+    focusMessages,
+    Boolean(options.compact),
+  );
 
   const snapshot: ResponseSnapshot = {
     id: randomUUID(),

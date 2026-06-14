@@ -158,10 +158,15 @@ export function renderVisibleMessage(
 }
 
 export function renderTokenGuide(snapshot: ResponseSnapshot) {
-  const users = collectHumanizedUsers(snapshot.visibleMessages)
+  const tokenMessages =
+    snapshot.focusMessages && snapshot.focusMessages.length > 0
+      ? snapshot.focusMessages
+      : snapshot.visibleMessages;
+
+  const users = collectHumanizedUsers(tokenMessages)
     .map((user) => `- ${humanizedUserToken(user)}`)
     .slice(0, 12);
-  const channels = collectHumanizedChannels(snapshot.visibleMessages)
+  const channels = collectHumanizedChannels(tokenMessages)
     .map((channel) => `- ${humanizedChannelToken(channel)}`)
     .slice(0, 12);
 

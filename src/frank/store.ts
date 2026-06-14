@@ -623,18 +623,31 @@ export async function upsertMemoryEvidence(
   });
 
   if (existing) {
+    const nextConfidence = Math.max(existing.confidence, evidence.confidence);
+    const nextSalience = Math.max(existing.salience * 0.85, evidence.salience);
+    const nextPinned = existing.pinned || evidence.pinned;
+    const nextObservedAt = new Date(evidence.lastObservedAt);
+    const changed =
+      existing.content !== evidence.content ||
+      existing.category !== evidence.category ||
+      Math.abs(existing.confidence - nextConfidence) > 0.0001 ||
+      Math.abs(existing.salience - nextSalience) > 0.0001 ||
+      existing.pinned !== nextPinned ||
+      existing.sourceEventId !== evidence.sourceEventId ||
+      existing.lastObservedAt.getTime() !== nextObservedAt.getTime();
+
     existing.content = evidence.content;
     existing.category = evidence.category;
-    existing.confidence = Math.max(existing.confidence, evidence.confidence);
-    existing.salience = Math.max(existing.salience * 0.85, evidence.salience);
-    existing.pinned = existing.pinned || evidence.pinned;
+    existing.confidence = nextConfidence;
+    existing.salience = nextSalience;
+    existing.pinned = nextPinned;
     existing.sourceEventId = evidence.sourceEventId;
-    existing.lastObservedAt = new Date(evidence.lastObservedAt);
+    existing.lastObservedAt = nextObservedAt;
     await existing.save();
-    return existing;
+    return { record: existing, changed };
   }
 
-  return FrankMemoryEvidenceRecord.create({
+  const created = await FrankMemoryEvidenceRecord.create({
     guildId: evidence.guildId,
     subjectType: evidence.subjectType,
     subjectId: evidence.subjectId,
@@ -648,6 +661,7 @@ export async function upsertMemoryEvidence(
     sourceEventId: evidence.sourceEventId,
     lastObservedAt: new Date(evidence.lastObservedAt),
   });
+  return { record: created, changed: true };
 }
 
 export async function listMemoryEvidence(

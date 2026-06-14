@@ -2,6 +2,7 @@ import { client } from "@/client";
 import { estimateTypingMs } from "@/frank/burst";
 import { createBurstPlanStream } from "@/frank/character";
 import {
+  FRANK_CHARACTER_STREAM_IDLE_TIMEOUT_MS,
   FRANK_CHARACTER_TIMEOUT_MS,
   FRANK_STREAM_FLUSH_POLL_MS,
   FRANK_TYPING_INDICATOR_START_MS,
@@ -188,6 +189,7 @@ export async function executeStreamedBurstPlan(options: {
   let finalPlanResolved = false;
   let typingIndicatorShown = false;
   let fullyDelivered = false;
+  let streamIdleTimer: NodeJS.Timeout | null = null;
 
   const maybeShowTypingIndicator = (reason: "startup_delay" | "first_chunk") => {
     if (typingIndicatorShown || signal.aborted) {
@@ -201,6 +203,34 @@ export async function executeStreamedBurstPlan(options: {
       snapshotId: options.snapshot.id,
     });
     void sendChannelTyping(options.snapshot.channelId).catch(() => undefined);
+  };
+
+  const clearStreamIdleTimer = () => {
+    if (!streamIdleTimer) {
+      return;
+    }
+
+    clearTimeout(streamIdleTimer);
+    streamIdleTimer = null;
+  };
+
+  const armStreamIdleTimer = (phase: "awaiting_first_chunk" | "awaiting_next_chunk") => {
+    clearStreamIdleTimer();
+    streamIdleTimer = setTimeout(() => {
+      if (signal.aborted) {
+        return;
+      }
+
+      frankDebug("executor", "streamed_burst.stalled", {
+        channelId: options.snapshot.channelId,
+        laneKey: options.laneKey,
+        phase,
+        snapshotId: options.snapshot.id,
+        sentMessageCount: sentMessageIds.length,
+        partialChunkCount: latestPlan.chunks.length,
+      });
+      controller.abort("worker_timeout");
+    }, FRANK_CHARACTER_STREAM_IDLE_TIMEOUT_MS);
   };
 
   const queueChunkSend = (index: number, chunk: BurstPlan["chunks"][number]) => {
@@ -285,49 +315,62 @@ export async function executeStreamedBurstPlan(options: {
       { abortSignal: streamAbortSignal },
     );
 
-    for await (const partial of stream.partialObjectStream) {
-      if (signal.aborted) {
-        break;
-      }
+    armStreamIdleTimer("awaiting_first_chunk");
+    await raceWithAbortSignal(
+      (async () => {
+        for await (const partial of stream.partialObjectStream) {
+          if (signal.aborted) {
+            break;
+          }
 
-      const previousPlan = latestPlan;
-      latestPlan = coercePartialBurstPlan(partial, options.maxBurstMessages);
-      const partialLogState = shouldLogPartialPlan(
-        lastLoggedPlan,
-        latestPlan,
-        lastLoggedChunkLength,
-      );
-      if (partialLogState.shouldLog) {
-        frankDebug("executor", "streamed_burst.partial", {
-          snapshotId: options.snapshot.id,
-          plan: summarizePartialPlan(latestPlan),
-        });
-        lastLoggedPlan = {
-          chunks: latestPlan.chunks.map((chunk) => ({ ...chunk })),
-          reactionEmoji: latestPlan.reactionEmoji,
-        };
-        lastLoggedChunkLength = partialLogState.nextLoggedLength;
-      }
+          const previousPlan = latestPlan;
+          latestPlan = coercePartialBurstPlan(partial, options.maxBurstMessages);
+          armStreamIdleTimer(
+            latestPlan.chunks.length > 0 ? "awaiting_next_chunk" : "awaiting_first_chunk",
+          );
+          const partialLogState = shouldLogPartialPlan(
+            lastLoggedPlan,
+            latestPlan,
+            lastLoggedChunkLength,
+          );
+          if (partialLogState.shouldLog) {
+            frankDebug("executor", "streamed_burst.partial", {
+              snapshotId: options.snapshot.id,
+              plan: summarizePartialPlan(latestPlan),
+            });
+            lastLoggedPlan = {
+              chunks: latestPlan.chunks.map((chunk) => ({ ...chunk })),
+              reactionEmoji: latestPlan.reactionEmoji,
+            };
+            lastLoggedChunkLength = partialLogState.nextLoggedLength;
+          }
 
-      for (let index = 0; index < latestPlan.chunks.length; index += 1) {
-        const chunk = latestPlan.chunks[index];
-        if (!chunk || !chunk.text) continue;
+          for (let index = 0; index < latestPlan.chunks.length; index += 1) {
+            const chunk = latestPlan.chunks[index];
+            if (!chunk || !chunk.text) continue;
 
-        if (!chunkStartedAt.has(index)) {
-          chunkStartedAt.set(index, index === 0 ? streamStartedAt : Date.now());
-          maybeShowTypingIndicator("first_chunk");
+            if (!chunkStartedAt.has(index)) {
+              chunkStartedAt.set(index, index === 0 ? streamStartedAt : Date.now());
+              maybeShowTypingIndicator("first_chunk");
+            }
+
+            const previousText = previousPlan.chunks[index]?.text ?? "";
+            if (previousText !== chunk.text || !chunkUpdatedAt.has(index)) {
+              chunkUpdatedAt.set(index, Date.now());
+            }
+          }
+
+          flushReadyChunks();
         }
+      })(),
+      streamAbortSignal,
+    );
 
-        const previousText = previousPlan.chunks[index]?.text ?? "";
-        if (previousText !== chunk.text || !chunkUpdatedAt.has(index)) {
-          chunkUpdatedAt.set(index, Date.now());
-        }
-      }
-
-      flushReadyChunks();
-    }
-
-    latestPlan = await stream.finalPlan;
+    armStreamIdleTimer(
+      latestPlan.chunks.length > 0 ? "awaiting_next_chunk" : "awaiting_first_chunk",
+    );
+    latestPlan = await raceWithAbortSignal(stream.finalPlan, streamAbortSignal);
+    clearStreamIdleTimer();
     finalPlanResolved = true;
     frankDebug("executor", "streamed_burst.final_plan", {
       snapshotId: options.snapshot.id,
@@ -423,10 +466,29 @@ export async function executeStreamedBurstPlan(options: {
     });
     return result;
   } finally {
+    clearStreamIdleTimer();
     clearInterval(flushTimer);
     clearTimeout(typingIndicatorTimer);
     activeExecutions.delete(options.laneKey);
   }
+}
+
+function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal) {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new Error("aborted"));
+  }
+
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      const onAbort = () => {
+        signal.removeEventListener("abort", onAbort);
+        reject(signal.reason ?? new Error("aborted"));
+      };
+
+      signal.addEventListener("abort", onAbort, { once: true });
+    }),
+  ]);
 }
 
 async function sendReply(

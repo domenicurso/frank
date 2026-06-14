@@ -7,6 +7,7 @@ import {
   FRANK_JOB_POLL_MS,
   FRANK_LIVE_JOB_CLAIM_BATCH,
   FRANK_LIVE_JOB_TIMEOUT_MS,
+  FRANK_MEMORY_DEBOUNCE_MS,
 } from "@/frank/constants";
 import { getFrankGuildSettings } from "@/frank/config";
 import { frankDebug } from "@/frank/debug";
@@ -36,7 +37,7 @@ import {
   createTurn,
   getChannelControl,
   getConcern,
-  getDefaultOpenLaneForAuthor,
+  getDefaultRelevantLaneForAuthor,
   getDefaultQueueLeaseMs,
   getLane,
   getQueuedConcernForLane,
@@ -201,7 +202,11 @@ function getSettleDelayMs(event: Extract<DiscordEvent, { type: "message_create" 
 async function chooseExistingLane(
   event: Extract<DiscordEvent, { type: "message_create" }>,
 ) {
-  return getDefaultOpenLaneForAuthor(event.guildId, event.channelId, event.authorId);
+  return getDefaultRelevantLaneForAuthor(
+    event.guildId,
+    event.channelId,
+    event.authorId,
+  );
 }
 
 async function decideConcern(
@@ -288,6 +293,31 @@ async function queueFollowup(lane: ConversationLane) {
       laneKey: lane.laneKey,
       dedupeKey: `followup:${lane.laneKey}`,
       availableAt: new Date(),
+    },
+  );
+}
+
+async function queueMemoryRefreshForChannel(
+  guildId: string,
+  channelId: string,
+  sourceEventId: string | null,
+) {
+  if (!sourceEventId) {
+    return;
+  }
+
+  await upsertLaneWork(
+    "memory_refresh",
+    {
+      guildId,
+      channelId,
+      sourceEventId,
+    } as MemoryRefreshJob,
+    {
+      guildId,
+      channelId,
+      dedupeKey: `memory-refresh:${channelId}`,
+      availableAt: new Date(Date.now() + FRANK_MEMORY_DEBOUNCE_MS),
     },
   );
 }
@@ -730,6 +760,12 @@ async function handleLaneFollowup(
     payload.laneKey,
   );
   if (!concern) {
+    const control = await getChannelControl(payload.guildId, payload.channelId);
+    await queueMemoryRefreshForChannel(
+      payload.guildId,
+      payload.channelId,
+      control.lastSeenEventId,
+    );
     return;
   }
 

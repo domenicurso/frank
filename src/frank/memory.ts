@@ -121,8 +121,25 @@ export async function extractMemoryFromChannel(
     return;
   }
 
+  const changedSubjects = new Set<string>();
   for (const evidence of modelEvidence) {
-    await upsertMemoryEvidence(evidence);
+    const result = await upsertMemoryEvidence(evidence);
+    if (result.changed) {
+      changedSubjects.add(`${evidence.subjectType}:${evidence.subjectId}`);
+    }
+  }
+
+  if (changedSubjects.size === 0) {
+    frankDebug("memory", "channel_extract.output", {
+      guildId,
+      channelId,
+      sourceEventId,
+      evidenceCount: modelEvidence.length,
+      subjectCount: 0,
+      subjects: [],
+      skippedProfileRefresh: true,
+    });
+    return;
   }
 
   const preferredDisplayNames = new Map(
@@ -131,9 +148,7 @@ export async function extractMemoryFromChannel(
       item.displayName,
     ]),
   );
-  const subjects = modelEvidence
-    ? [...new Set(modelEvidence.map((item) => `${item.subjectType}:${item.subjectId}`))]
-    : [...new Set(messages.map((message) => `user:${message.authorId}`))];
+  const subjects = [...changedSubjects];
 
   for (const subject of subjects) {
     if (options.abortSignal?.aborted) {

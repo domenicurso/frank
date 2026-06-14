@@ -1,5 +1,4 @@
 import { client } from "@/client";
-import { FRANK_MEMORY_DEBOUNCE_MS } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import { getFrankGuildSettings, isFrankChannelAllowed } from "@/frank/config";
 import { upsertLaneWork } from "@/frank/queueStore";
@@ -154,87 +153,6 @@ function guessMediaTypeFromUrl(url: string) {
   return "unknown";
 }
 
-function shouldScheduleMemoryExtraction(
-  message: Message,
-  mentionsBot: boolean,
-) {
-  if (message.attachments.size > 0) return true;
-
-  const content = message.content.trim().toLowerCase();
-  if (!content) return false;
-
-  const words = normalizeWords(content);
-  if (words.length <= 2 && content.length < 14) {
-    return false;
-  }
-
-  const lowSignalPhrases = new Set([
-    "ok",
-    "okay",
-    "k",
-    "kk",
-    "lol",
-    "lmao",
-    "lmfao",
-    "bruh",
-    "what",
-    "duh",
-    "yeah",
-    "yep",
-    "nah",
-    "no",
-    "sure",
-    "word",
-    "true",
-  ]);
-
-  if (lowSignalPhrases.has(content)) {
-    return false;
-  }
-
-  if (mentionsBot && content.length >= 14) {
-    return true;
-  }
-
-  if (message.mentions.repliedUser?.id === client.user?.id) {
-    return true;
-  }
-
-  const memorySignalWords = new Set([
-    "i",
-    "im",
-    "ive",
-    "my",
-    "me",
-    "we",
-    "our",
-    "project",
-    "finals",
-    "exam",
-    "midterm",
-    "school",
-    "class",
-    "study",
-    "studying",
-    "week",
-    "today",
-    "tomorrow",
-    "job",
-    "work",
-    "working",
-    "building",
-    "making",
-    "like",
-    "love",
-    "hate",
-    "prefer",
-    "want",
-    "need",
-  ]);
-
-  return words.some((word) => memorySignalWords.has(word));
-}
-
 export async function ingestMessageCreate(message: Message) {
   if (!message.guild || message.author.bot || !message.channel.isTextBased()) return;
 
@@ -243,7 +161,6 @@ export async function ingestMessageCreate(message: Message) {
   if (!(await isFrankChannelAllowed(message.guild.id, message.channel.id))) return;
   const mentionsBot =
     message.mentions.users.has(client.user?.id ?? "") || hasDirectNameMention(message);
-  const shouldExtractMemory = shouldScheduleMemoryExtraction(message, mentionsBot);
   const mentionedUsers = collectMentionedUsers(message);
   const mentionedChannels = collectMentionedChannels(message);
   const replyPreview = collectReplyPreview(message);
@@ -290,29 +207,10 @@ export async function ingestMessageCreate(message: Message) {
     channelId: message.channel.id,
     availableAt: new Date(),
   });
-  if (shouldExtractMemory) {
-    await upsertLaneWork(
-      "memory_refresh",
-      {
-        guildId: message.guild.id,
-        channelId: message.channel.id,
-        sourceEventId: eventId,
-      },
-      {
-        dedupeKey: `memory-refresh:${message.channel.id}`,
-        guildId: message.guild.id,
-        channelId: message.channel.id,
-        availableAt: new Date(Date.now() + FRANK_MEMORY_DEBOUNCE_MS),
-      },
-    );
-  }
 
   frankDebug("ingress", "message_create.output", {
     eventId,
-    scheduledJobs: [
-      "lane_update",
-      ...(shouldExtractMemory ? ["memory_refresh"] : []),
-    ],
+    scheduledJobs: ["lane_update"],
   });
 }
 
