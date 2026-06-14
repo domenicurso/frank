@@ -7,6 +7,25 @@ export const FRANK_JOB_TYPES = [
 
 export type FrankJobType = (typeof FRANK_JOB_TYPES)[number];
 
+export const FRANK_QUEUE_NAMES = [
+  "runtime_update",
+  "settle_channel",
+  "generate_intent",
+  "memory_extraction",
+] as const;
+
+export type FrankQueueName = (typeof FRANK_QUEUE_NAMES)[number];
+export type QueueItemState = "pending" | "leased" | "completed" | "cancelled";
+export type IntentStatus =
+  | "pending"
+  | "generating"
+  | "sending"
+  | "sent"
+  | "superseded"
+  | "aborted"
+  | "invalidated";
+export type InterruptPolicy = "default";
+
 export type DiscordEvent =
   | {
       type: "message_create";
@@ -148,7 +167,10 @@ export type ChannelRuntimeProjection = {
   channelId: string;
   visibleMessages: VisibleMessage[];
   recentEventIds: string[];
+  activeIntentId: string | null;
+  activeIntentRevision: number | null;
   activeSnapshotId: string | null;
+  activeSnapshotCreatedAt: string | null;
   activeJobId: string | null;
   lastBotMessageId: string | null;
   lastBotSentAt: string | null;
@@ -156,6 +178,23 @@ export type ChannelRuntimeProjection = {
   pendingIntent: PendingIntentContext | null;
   lastResponseEventId: string | null;
   lastHumanMessageAt: string | null;
+};
+
+export type ChannelControl = {
+  guildId: string;
+  channelId: string;
+  channelRevision: number;
+  lastSeenEventId: string | null;
+  lastHumanMessageId: string | null;
+  lastHumanMessageAt: string | null;
+  lastBotMessageId: string | null;
+  lastBotSentAt: string | null;
+  activeIntentId: string | null;
+  activeIntentRevision: number | null;
+  activeSnapshotId: string | null;
+  activeSnapshotCreatedAt: string | null;
+  pendingSettleAt: string | null;
+  updatedAt: string;
 };
 
 export type AttentionMode = "conversation-aware" | "opportunistic";
@@ -253,6 +292,23 @@ export type ResponseSnapshot = {
   attentionDecision: AttentionDecision;
 };
 
+export type ConversationIntent = {
+  id: string;
+  channelId: string;
+  guildId: string;
+  sourceEventId: string;
+  sourceMessageId: string | null;
+  channelRevision: number;
+  snapshotId: string;
+  snapshotCreatedAt: string;
+  snapshot: ResponseSnapshot;
+  status: IntentStatus;
+  interruptPolicy: InterruptPolicy | string;
+  abortReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type BurstChunk = {
   text: string;
   pauseMs?: number;
@@ -277,7 +333,8 @@ export type InvalidationReason =
   | "new_reply"
   | "channel_shift"
   | "manual_abort"
-  | "worker_timeout";
+  | "worker_timeout"
+  | "worker_shutdown";
 
 export type RuntimeUpdateJob = {
   eventId: string;
@@ -298,6 +355,49 @@ export type MemoryExtractionJob = {
   guildId: string;
   channelId: string;
   sourceEventId: string;
+};
+
+export type SettleChannelJob = {
+  guildId: string;
+  channelId: string;
+  sourceEventId: string;
+  channelRevision: number;
+};
+
+export type GenerateIntentJob = {
+  guildId: string;
+  channelId: string;
+  intentId: string;
+  channelRevision: number;
+  responseDecisionAt: string;
+};
+
+export type QueueItemPayload =
+  | RuntimeUpdateJob
+  | SettleChannelJob
+  | GenerateIntentJob
+  | MemoryExtractionJob;
+
+export type QueueItem = {
+  id: string;
+  queueName: FrankQueueName;
+  channelId: string | null;
+  guildId: string | null;
+  intentId: string | null;
+  dedupeKey: string | null;
+  state: QueueItemState;
+  availableAt: string;
+  leaseOwner: string | null;
+  leaseExpiresAt: string | null;
+  attempts: number;
+  payload: QueueItemPayload;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type QueueLease = QueueItem & {
+  leaseOwner: string;
+  leaseExpiresAt: string;
 };
 
 export type FrankJobPayload =

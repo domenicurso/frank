@@ -1,6 +1,7 @@
 import { client } from "@/client";
 import {
   initializeDatabase,
+  sequelize,
   setDiscordClient,
   stopBackgroundTasks,
 } from "@/database/index";
@@ -251,7 +252,14 @@ console.log(chalk.green("Discord client configured for database operations!"));
 console.log(chalk.cyan.bold(`\nInitialized in ${Date.now() - startTime}ms!\n`));
 
 // Graceful shutdown handling
+let shutdownStarted = false;
+
 async function gracefulShutdown(signal: string) {
+  if (shutdownStarted) {
+    return;
+  }
+  shutdownStarted = true;
+
   console.log(
     chalk.yellow(`\n[${signal}] Received shutdown signal. Cleaning up...`),
   );
@@ -268,36 +276,39 @@ async function gracefulShutdown(signal: string) {
     stopProcessingCleanup();
 
     console.log(chalk.blue("Stopping Frank worker..."));
-    stopFrankWorker();
+    await stopFrankWorker();
 
     // Gracefully close Discord client
     console.log(chalk.blue("Destroying Discord client..."));
     client.destroy();
 
+    console.log(chalk.blue("Closing database connection..."));
+    await sequelize.close();
+
     console.log(chalk.green("Cleanup completed successfully"));
-    process.exit(0);
+    process.exitCode = 0;
   } catch (error) {
     console.error(chalk.red("Error during cleanup:"), error);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
 // Handle different shutdown signals
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-process.on("SIGINT", () => gracefulShutdown("SIGINT"));
-process.on("SIGUSR1", () => gracefulShutdown("SIGUSR1"));
-process.on("SIGUSR2", () => gracefulShutdown("SIGUSR2"));
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+process.on("SIGUSR1", () => void gracefulShutdown("SIGUSR1"));
+process.on("SIGUSR2", () => void gracefulShutdown("SIGUSR2"));
 
 // Handle uncaught exceptions and promise rejections
 process.on("uncaughtException", (error) => {
   logError("process", "Uncaught exception", error);
-  gracefulShutdown("uncaughtException");
+  void gracefulShutdown("uncaughtException");
 });
 
 process.on("unhandledRejection", (reason, promise) => {
   logError("process", "Unhandled rejection", reason, { promise });
   if (process.env.FRANK_STRICT_REJECTIONS?.trim().toLowerCase() === "true") {
-    gracefulShutdown("unhandledRejection");
+    void gracefulShutdown("unhandledRejection");
   }
 });
 

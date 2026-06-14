@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  isActiveSnapshotStale,
   shouldDelayResponseDecision,
+  shouldSkipResponseDecisionBehindActiveSnapshot,
   shouldSkipStaleResponseDecision,
 } from "@/frank/decisionPolicy";
 import type {
@@ -17,15 +19,18 @@ function makeRuntime(
     channelId: "channel",
     visibleMessages: [],
     recentEventIds: [],
-    activeSnapshotId: null,
-    activeJobId: null,
-    lastBotMessageId: null,
-    lastBotSentAt: null,
-    lastMentionAt: null,
-    pendingIntent: null,
-    lastResponseEventId: null,
-    lastHumanMessageAt: null,
     ...overrides,
+    activeIntentId: overrides.activeIntentId ?? null,
+    activeIntentRevision: overrides.activeIntentRevision ?? null,
+    activeSnapshotId: overrides.activeSnapshotId ?? null,
+    activeSnapshotCreatedAt: overrides.activeSnapshotCreatedAt ?? null,
+    activeJobId: overrides.activeJobId ?? null,
+    lastBotMessageId: overrides.lastBotMessageId ?? null,
+    lastBotSentAt: overrides.lastBotSentAt ?? null,
+    lastMentionAt: overrides.lastMentionAt ?? null,
+    pendingIntent: overrides.pendingIntent ?? null,
+    lastResponseEventId: overrides.lastResponseEventId ?? null,
+    lastHumanMessageAt: overrides.lastHumanMessageAt ?? null,
   };
 }
 
@@ -94,5 +99,31 @@ describe("decision policy", () => {
         sourceEvent,
       }),
     ).toBe(false);
+  });
+
+  test("marks active snapshot stale when newer human activity exists", () => {
+    expect(
+      isActiveSnapshotStale(
+        makeRuntime({
+          activeSnapshotId: "snapshot-1",
+          activeSnapshotCreatedAt: "2026-06-14T01:40:00.000Z",
+          lastHumanMessageAt: "2026-06-14T01:40:05.000Z",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("skips deferred decisions older than the active snapshot", () => {
+    expect(
+      shouldSkipResponseDecisionBehindActiveSnapshot({
+        runtime: makeRuntime({
+          activeSnapshotId: "snapshot-1",
+          activeSnapshotCreatedAt: "2026-06-14T01:40:05.000Z",
+        }),
+        sourceEvent: makeMessageCreate({
+          createdAt: "2026-06-14T01:40:00.000Z",
+        }),
+      }),
+    ).toBe(true);
   });
 });

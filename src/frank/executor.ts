@@ -4,6 +4,7 @@ import { createBurstPlanStream } from "@/frank/character";
 import {
   FRANK_CHARACTER_TIMEOUT_MS,
   FRANK_STREAM_FLUSH_POLL_MS,
+  FRANK_TYPING_INDICATOR_START_MS,
 } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import {
@@ -71,6 +72,21 @@ export function hasPendingUnsentExecution(channelId: string) {
   return active.sentMessageCount === 0;
 }
 
+export function hasActiveExecution(channelId: string) {
+  return activeExecutions.has(channelId);
+}
+
+export async function abortAllActiveExecutions(reason: InvalidationReason) {
+  for (const [channelId, active] of activeExecutions.entries()) {
+    frankDebug("executor", "abort_all", {
+      channelId,
+      snapshotId: active.snapshot.id,
+      reason,
+    });
+    active.controller.abort(reason);
+  }
+}
+
 export function getPendingUnsentExecutionSnapshotId(channelId: string) {
   const active = activeExecutions.get(channelId);
   if (!active || active.sentMessageCount > 0) {
@@ -80,12 +96,33 @@ export function getPendingUnsentExecutionSnapshotId(channelId: string) {
   return active.snapshot.id;
 }
 
+export function getPendingUnsentExecutionContext(channelId: string) {
+  const active = activeExecutions.get(channelId);
+  if (!active || active.sentMessageCount > 0) {
+    return null;
+  }
+
+  const latestVisibleMessage =
+    active.snapshot.visibleMessages[active.snapshot.visibleMessages.length - 1] ?? null;
+
+  return {
+    snapshotId: active.snapshot.id,
+    latestAuthorId: latestVisibleMessage?.authorId ?? null,
+    anchorMessageId: active.snapshot.anchorMessageId,
+  };
+}
+
 export async function executeStreamedBurstPlan(options: {
   snapshot: ResponseSnapshot;
   typingStartedAt: string;
   maxBurstMessages: number;
   reactionsEnabled: boolean;
   abortSignal?: AbortSignal;
+  beforeSendChunk?: (options: {
+    chunk: { text: string; pauseMs?: number };
+    isFirst: boolean;
+    sentMessageCount: number;
+  }) => Promise<void>;
 }) {
   const channel =
     (await client.channels.fetch(options.snapshot.channelId).catch(() => null)) ??
@@ -125,6 +162,22 @@ export async function executeStreamedBurstPlan(options: {
   let lastLoggedChunkLength = 0;
   let sendChain = Promise.resolve();
   let finalPlanResolved = false;
+  let typingIndicatorShown = false;
+  let fullyDelivered = false;
+
+  const maybeShowTypingIndicator = (reason: "startup_delay" | "first_chunk") => {
+    if (typingIndicatorShown || signal.aborted) {
+      return;
+    }
+
+    typingIndicatorShown = true;
+    frankDebug("executor", "typing_indicator", {
+      channelId: options.snapshot.channelId,
+      reason,
+      snapshotId: options.snapshot.id,
+    });
+    void sendChannelTyping(options.snapshot.channelId).catch(() => undefined);
+  };
 
   const queueChunkSend = (index: number, chunk: BurstPlan["chunks"][number]) => {
     finalizedChunkIndexes.add(index);
@@ -140,6 +193,7 @@ export async function executeStreamedBurstPlan(options: {
         sentMessageIds,
         sentMessages,
         signal,
+        beforeSendChunk: options.beforeSendChunk,
       });
     });
   };
@@ -181,6 +235,14 @@ export async function executeStreamedBurstPlan(options: {
     }
   }, FRANK_STREAM_FLUSH_POLL_MS);
 
+  const typingIndicatorDelayMs = Math.max(
+    0,
+    FRANK_TYPING_INDICATOR_START_MS - (Date.now() - streamStartedAt),
+  );
+  const typingIndicatorTimer = setTimeout(() => {
+    maybeShowTypingIndicator("startup_delay");
+  }, typingIndicatorDelayMs);
+
   try {
     frankDebug("executor", "streamed_burst.input", {
       snapshotId: options.snapshot.id,
@@ -190,8 +252,6 @@ export async function executeStreamedBurstPlan(options: {
       maxBurstMessages: options.maxBurstMessages,
       reactionsEnabled: options.reactionsEnabled,
     });
-
-    await sendChannelTyping(options.snapshot.channelId).catch(() => undefined);
 
     const stream = createBurstPlanStream(
       options.snapshot,
@@ -229,7 +289,7 @@ export async function executeStreamedBurstPlan(options: {
 
         if (!chunkStartedAt.has(index)) {
           chunkStartedAt.set(index, index === 0 ? streamStartedAt : Date.now());
-          void sendChannelTyping(options.snapshot.channelId).catch(() => undefined);
+          maybeShowTypingIndicator("first_chunk");
         }
 
         const previousText = previousPlan.chunks[index]?.text ?? "";
@@ -254,6 +314,9 @@ export async function executeStreamedBurstPlan(options: {
     flushReadyChunks(true);
 
     await sendChain;
+    fullyDelivered =
+      latestPlan.chunks.length > 0 &&
+      sentMessageIds.length >= latestPlan.chunks.length;
 
     if (!signal.aborted && latestPlan.reactionEmoji && options.snapshot.anchorMessageId) {
       try {
@@ -280,8 +343,11 @@ export async function executeStreamedBurstPlan(options: {
       plan: latestPlan,
       sentMessageIds,
       sentMessages,
-      aborted: signal.aborted,
-      reason: signal.reason as InvalidationReason | undefined,
+      aborted: signal.aborted && !fullyDelivered,
+      reason:
+        signal.aborted && !fullyDelivered
+          ? normalizeExecutionAbortReason(signal.reason)
+          : undefined,
     };
     frankDebug("executor", "streamed_burst.output", {
       aborted: result.aborted,
@@ -312,13 +378,15 @@ export async function executeStreamedBurstPlan(options: {
       plan: latestPlan,
       sentMessageIds,
       sentMessages,
-      aborted: true,
-      reason: normalizeExecutionAbortReason(
-        signal.reason ??
-          options.abortSignal?.reason ??
-          streamAbortSignal.reason ??
-          error,
-      ),
+      aborted: !fullyDelivered,
+      reason: fullyDelivered
+        ? undefined
+        : normalizeExecutionAbortReason(
+            signal.reason ??
+              options.abortSignal?.reason ??
+              streamAbortSignal.reason ??
+              error,
+          ),
     };
     frankDebug("executor", "streamed_burst.aborted", {
       aborted: result.aborted,
@@ -330,6 +398,7 @@ export async function executeStreamedBurstPlan(options: {
     return result;
   } finally {
     clearInterval(flushTimer);
+    clearTimeout(typingIndicatorTimer);
     activeExecutions.delete(options.snapshot.channelId);
   }
 }
@@ -404,6 +473,11 @@ async function sendChunkWhenTypingBudgetMet(options: {
   sentMessageIds: string[];
   sentMessages: Array<{ id: string; text: string; createdAt: string }>;
   signal: AbortSignal;
+  beforeSendChunk?: (options: {
+    chunk: { text: string; pauseMs?: number };
+    isFirst: boolean;
+    sentMessageCount: number;
+  }) => Promise<void>;
 }) {
   const typingMs = estimateTypingMs(options.chunk.text);
   const elapsed = Date.now() - options.startedAt;
@@ -420,6 +494,18 @@ async function sendChunkWhenTypingBudgetMet(options: {
 
   if (remainder > 0) {
     await wait(remainder, options.signal);
+  }
+
+  if (options.beforeSendChunk) {
+    await options.beforeSendChunk({
+      chunk: options.chunk,
+      isFirst: options.isFirst,
+      sentMessageCount: options.sentMessageIds.length,
+    });
+  }
+
+  if (options.signal.aborted) {
+    throw new Error(String(options.signal.reason || "aborted"));
   }
 
   const discordContent = toDiscordContent(

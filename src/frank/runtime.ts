@@ -110,7 +110,10 @@ export function markBurstSent(
     ...runtime,
     visibleMessages,
     activeJobId: null,
+    activeIntentId: null,
+    activeIntentRevision: null,
     activeSnapshotId: null,
+    activeSnapshotCreatedAt: null,
     pendingIntent: null,
     lastBotMessageId,
     lastBotSentAt: sentAt,
@@ -130,7 +133,10 @@ export function markBurstInterrupted(
   return {
     ...runtime,
     activeJobId: null,
+    activeIntentId: null,
+    activeIntentRevision: null,
     activeSnapshotId: null,
+    activeSnapshotCreatedAt: null,
     pendingIntent:
       remainingChunks.length > 0
         ? {
@@ -154,6 +160,9 @@ export function releasePendingSnapshot(
   return {
     ...runtime,
     activeJobId: null,
+    activeIntentId: null,
+    activeIntentRevision: null,
     activeSnapshotId: null,
+    activeSnapshotCreatedAt: null,
   };
 }

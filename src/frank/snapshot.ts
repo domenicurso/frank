@@ -31,7 +31,15 @@ export async function buildResponseSnapshot(
     return null;
   }
 
-  const memory = await retrieveProfileMemory(runtime.guildId, runtime.visibleMessages);
+  const focusUserId =
+    attentionDecision.reason === "direct_mention" ||
+    attentionDecision.reason === "reply_to_bot" ||
+    attentionDecision.reason === "continuation"
+      ? latestMessage?.authorId ?? null
+      : null;
+  const memory = await retrieveProfileMemory(runtime.guildId, runtime.visibleMessages, {
+    focusUserId,
+  });
 
   const snapshot = {
     id: randomUUID(),

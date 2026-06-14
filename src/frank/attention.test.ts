@@ -20,7 +20,10 @@ const baseRuntime: ChannelRuntimeProjection = {
   channelId: "channel",
   visibleMessages: [],
   recentEventIds: [],
+  activeIntentId: null,
+  activeIntentRevision: null,
   activeSnapshotId: null,
+  activeSnapshotCreatedAt: null,
   activeJobId: null,
   lastBotMessageId: "bot-1",
   lastBotSentAt: new Date(Date.now() - 30_000).toISOString(),
@@ -122,5 +125,66 @@ describe("decideAttention", () => {
 
     expect(decision.shouldRespond).toBe(false);
     expect(decision.reason).toBe("cooldown");
+  });
+
+  test("treats the end of a same-author burst as directed when an earlier burst message summoned Frank", () => {
+    const createdAt = new Date().toISOString();
+    const decision = decideAttention(
+      {
+        ...baseRuntime,
+        visibleMessages: [
+          {
+            id: "m4",
+            authorId: "user",
+            authorName: "Dom",
+            authorUsername: "dom",
+            content: "frank",
+            mentionsBot: true,
+            replyToMessageId: null,
+            createdAt,
+            fromBot: false,
+          },
+          {
+            id: "m5",
+            authorId: "user",
+            authorName: "Dom",
+            authorUsername: "dom",
+            content: "is your queue working",
+            mentionsBot: false,
+            replyToMessageId: null,
+            createdAt,
+            fromBot: false,
+          },
+          {
+            id: "m6",
+            authorId: "user",
+            authorName: "Dom",
+            authorUsername: "dom",
+            content: "who knows",
+            mentionsBot: false,
+            replyToMessageId: null,
+            createdAt,
+            fromBot: false,
+          },
+        ],
+      },
+      {
+        id: "m6",
+        authorId: "user",
+        authorName: "Dom",
+        authorUsername: "dom",
+        content: "who knows",
+        mentionsBot: false,
+        replyToMessageId: null,
+        createdAt,
+        fromBot: false,
+      },
+      settings,
+      "bot",
+    );
+
+    expect(decision.shouldRespond).toBe(true);
+    expect(decision.reason).toBe("continuation");
+    expect(decision.targetMessageId).toBe("m6");
   });
 });

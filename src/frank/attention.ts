@@ -21,6 +21,37 @@ function hasRecentBotContext(runtime: ChannelRuntimeProjection) {
   return Date.now() - new Date(runtime.lastBotSentAt).getTime() < 2 * 60 * 1000;
 }
 
+function getSameAuthorTail(
+  runtime: ChannelRuntimeProjection,
+  latestMessage: VisibleMessage,
+) {
+  const tail: VisibleMessage[] = [];
+
+  for (let index = runtime.visibleMessages.length - 1; index >= 0; index -= 1) {
+    const message = runtime.visibleMessages[index]!;
+    if (message.authorId !== latestMessage.authorId || message.fromBot) {
+      break;
+    }
+    tail.unshift(message);
+  }
+
+  return tail;
+}
+
+function hasDirectedBurstTail(
+  runtime: ChannelRuntimeProjection,
+  latestMessage: VisibleMessage,
+  settings: FrankGuildSettings,
+) {
+  const tail = getSameAuthorTail(runtime, latestMessage);
+
+  return tail.some(
+    (message) =>
+      (settings.allowedMentions && message.mentionsBot) ||
+      isReplyToBot(runtime, message, settings),
+  );
+}
+
 export function decideAttention(
   runtime: ChannelRuntimeProjection,
   latestMessage: VisibleMessage | null,
@@ -70,6 +101,29 @@ export function decideAttention(
         latestMessageId: latestMessage.id,
         replyToMessageId: latestMessage.replyToMessageId,
         lastBotMessageId: runtime.lastBotMessageId,
+      },
+      decision,
+    });
+    return decision;
+  }
+
+  if (hasDirectedBurstTail(runtime, latestMessage, settings)) {
+    const decision: AttentionDecision = {
+      shouldRespond: true,
+      reason: "continuation",
+      targetMessageId: latestMessage.id,
+      opportunismScore: 1,
+    };
+    frankDebug("attention", "heuristic.output", {
+      input: {
+        latestMessageId: latestMessage.id,
+        content: latestMessage.content,
+        burstTail: getSameAuthorTail(runtime, latestMessage).map((message) => ({
+          id: message.id,
+          content: message.content,
+          mentionsBot: message.mentionsBot,
+          replyToMessageId: message.replyToMessageId,
+        })),
       },
       decision,
     });

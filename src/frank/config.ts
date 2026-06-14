@@ -1,4 +1,5 @@
 import { getGuildConfig } from "@/database";
+import { FRANK_MAX_BURST_MESSAGES } from "@/frank/constants";
 import type { FrankGuildSettings } from "@/frank/types";
 import { parseJson } from "@/frank/json";
 
@@ -20,7 +21,11 @@ export async function getFrankGuildSettings(
     opportunismLevel: clampInt(config?.opportunismLevel ?? 15, 0, 100),
     reactionsEnabled: config?.reactionsEnabled ?? true,
     burstResponsesEnabled: config?.burstResponsesEnabled ?? true,
-    maxBurstMessages: clampInt(config?.maxBurstMessages ?? 5, 1, 500),
+    maxBurstMessages: clampInt(
+      config?.maxBurstMessages ?? FRANK_MAX_BURST_MESSAGES,
+      1,
+      FRANK_MAX_BURST_MESSAGES,
+    ),
     cooldownSeconds: clampInt(config?.cooldownDuration ?? 30, 0, 600),
     allowedMentions: config?.allowedMentions ?? true,
     allowedReplies: config?.allowedReplies ?? true,

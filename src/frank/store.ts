@@ -2,6 +2,7 @@ import { sequelize } from "@/database";
 import { FRANK_DUE_JOB_SCAN_LIMIT } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import { parseJson, stringifyJson } from "@/frank/json";
+import { initializeFrankQueueModels } from "@/frank/queueStore";
 import type {
   ChannelRuntimeProjection,
   FrankJobPayload,
@@ -22,7 +23,10 @@ const DEFAULT_RUNTIME = (
   channelId,
   visibleMessages: [],
   recentEventIds: [],
+  activeIntentId: null,
+  activeIntentRevision: null,
   activeSnapshotId: null,
+  activeSnapshotCreatedAt: null,
   activeJobId: null,
   lastBotMessageId: null,
   lastBotSentAt: null,
@@ -124,6 +128,8 @@ async function withSqliteRetry<T>(
 export function initializeFrankModels() {
   if (initialized) return;
   initialized = true;
+
+  initializeFrankQueueModels();
 
   FrankEventRecord.init(
     {
@@ -571,6 +577,26 @@ export async function getChannelRuntime(
     record.state,
     DEFAULT_RUNTIME(guildId, channelId),
   );
+}
+
+export async function hasFrankJobsForChannel(
+  channelId: string,
+  jobTypes: FrankJobType[],
+  statuses: Array<"pending" | "running"> = ["pending", "running"],
+) {
+  const count = await FrankJobRecord.count({
+    where: {
+      channelId,
+      jobType: {
+        [Op.in]: jobTypes,
+      },
+      status: {
+        [Op.in]: statuses,
+      },
+    },
+  });
+
+  return count > 0;
 }
 
 export async function saveChannelRuntime(runtime: ChannelRuntimeProjection) {

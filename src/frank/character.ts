@@ -78,8 +78,7 @@ function collectRecentVisualMedia(messages: VisibleMessage[]) {
   return media;
 }
 
-function buildCharacterMessages(snapshot: ResponseSnapshot): ModelMessage[] {
-  const systemPrompt = buildCharacterSystemPrompt();
+function buildCharacterUserMessages(snapshot: ResponseSnapshot): ModelMessage[] {
   const userPrompt = buildCharacterUserPrompt(snapshot);
   const media = collectRecentVisualMedia(snapshot.visibleMessages);
   const userContent: Array<
@@ -114,7 +113,6 @@ function buildCharacterMessages(snapshot: ResponseSnapshot): ModelMessage[] {
   }
 
   return [
-    { role: "system", content: systemPrompt },
     { role: "user", content: userContent },
   ];
 }
@@ -130,8 +128,8 @@ export function createBurstPlanStream(
     throw new Error("OPENROUTER_API_KEY missing");
   }
 
-  const messages = buildCharacterMessages(snapshot);
   const systemPrompt = buildCharacterSystemPrompt();
+  const messages = buildCharacterUserMessages(snapshot);
   const userPrompt = buildCharacterUserPrompt(snapshot);
 
   frankDebug("character", "stream.input", {
@@ -147,6 +145,7 @@ export function createBurstPlanStream(
     model: openrouter(FRANK_CHARACTER_MODEL),
     schema: burstPlanSchema,
     temperature: 0.8,
+    system: systemPrompt,
     abortSignal:
       options.abortSignal ?? AbortSignal.timeout(FRANK_CHARACTER_TIMEOUT_MS),
     messages,

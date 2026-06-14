@@ -1,22 +1,20 @@
 import { client } from "@/client";
-import {
-  FRANK_BURST_SETTLE_MS,
-  FRANK_MEMORY_DEBOUNCE_MS,
-} from "@/frank/constants";
+import { FRANK_MEMORY_DEBOUNCE_MS } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import {
-  getPendingUnsentExecutionSnapshotId,
-  hasPendingUnsentExecution,
+  getPendingUnsentExecutionContext,
   interruptChannelExecution,
 } from "@/frank/executor";
 import { getIncomingMessageInterruptReason } from "@/frank/ingressPolicy";
 import { getFrankGuildSettings, isFrankChannelAllowed } from "@/frank/config";
-import { releasePendingSnapshot } from "@/frank/runtime";
+import {
+  getActiveIntentForChannel,
+  supersedeActiveIntent,
+  upsertQueueItem,
+} from "@/frank/queueStore";
 import {
   appendFrankEvent,
-  enqueueFrankJob,
-  getChannelRuntime,
-  saveChannelRuntime,
+  getFrankEventById,
 } from "@/frank/store";
 import type { DiscordEvent } from "@/frank/types";
 import type {
@@ -168,26 +166,33 @@ function guessMediaTypeFromUrl(url: string) {
   return "unknown";
 }
 
-function getIngressSettleMs(message: Message, mentionsBot: boolean) {
-  if (mentionsBot) {
-    return 250;
-  }
-
-  if (message.mentions.repliedUser?.id === client.user?.id) {
-    return 250;
-  }
-
-  return FRANK_BURST_SETTLE_MS;
-}
-
-function getInterruptReasonForMessage(
+async function getInterruptReasonForMessage(
   message: Message,
   mentionsBot: boolean,
 ) {
+  let pendingUnsentExecution = getPendingUnsentExecutionContext(message.channel.id);
+
+  if (!pendingUnsentExecution) {
+    const { intent } = await getActiveIntentForChannel(
+      message.guild!.id,
+      message.channel.id,
+    );
+    if (intent && (intent.status === "pending" || intent.status === "generating")) {
+      const sourceEvent = await getFrankEventById(intent.sourceEventId);
+      pendingUnsentExecution = {
+        latestAuthorId:
+          sourceEvent && "authorId" in sourceEvent ? sourceEvent.authorId : null,
+        anchorMessageId: intent.snapshot.anchorMessageId,
+        snapshotId: intent.snapshotId,
+      };
+    }
+  }
+
   return getIncomingMessageInterruptReason({
+    authorId: message.author.id,
     mentionsBot,
     repliesToBot: message.mentions.repliedUser?.id === client.user?.id,
-    hasPendingUnsentExecution: hasPendingUnsentExecution(message.channel.id),
+    pendingUnsentExecution,
   });
 }
 
@@ -280,9 +285,8 @@ export async function ingestMessageCreate(message: Message) {
   if (!(await isFrankChannelAllowed(message.guild.id, message.channel.id))) return;
   const mentionsBot =
     message.mentions.users.has(client.user?.id ?? "") || hasDirectNameMention(message);
-  const settleMs = getIngressSettleMs(message, mentionsBot);
   const shouldExtractMemory = shouldScheduleMemoryExtraction(message, mentionsBot);
-  const interruptReason = getInterruptReasonForMessage(message, mentionsBot);
+  const interruptReason = await getInterruptReasonForMessage(message, mentionsBot);
   const mentionedUsers = collectMentionedUsers(message);
   const mentionedChannels = collectMentionedChannels(message);
   const replyPreview = collectReplyPreview(message);
@@ -323,47 +327,22 @@ export async function ingestMessageCreate(message: Message) {
 
   const eventId = await appendFrankEvent(event);
   if (interruptReason) {
-    const pendingSnapshotId =
-      interruptReason === "channel_shift"
-        ? getPendingUnsentExecutionSnapshotId(message.channel.id)
-        : null;
     interruptChannelExecution(message.channel.id, interruptReason);
-    if (pendingSnapshotId) {
-      const runtime = await getChannelRuntime(message.guild.id, message.channel.id);
-      const nextRuntime = releasePendingSnapshot(runtime, pendingSnapshotId);
-      if (nextRuntime !== runtime) {
-        await saveChannelRuntime(nextRuntime);
-        frankDebug("ingress", "released_pending_snapshot", {
-          channelId: message.channel.id,
-          guildId: message.guild.id,
-          snapshotId: pendingSnapshotId,
-          reason: interruptReason,
-        });
-      }
-    }
+    await supersedeActiveIntent({
+      guildId: message.guild.id,
+      channelId: message.channel.id,
+      reason: interruptReason,
+    });
   }
 
-  await enqueueFrankJob("runtime_update", { eventId }, {
-    queueKey: `runtime:${eventId}`,
+  await upsertQueueItem("runtime_update", { eventId }, {
+    dedupeKey: `runtime:${eventId}`,
     guildId: message.guild.id,
     channelId: message.channel.id,
+    availableAt: new Date(),
   });
-  await enqueueFrankJob(
-    "response_decision",
-    {
-      guildId: message.guild.id,
-      channelId: message.channel.id,
-      sourceEventId: eventId,
-    },
-    {
-      queueKey: `decision:${message.channel.id}`,
-      guildId: message.guild.id,
-      channelId: message.channel.id,
-      runAt: new Date(Date.now() + settleMs),
-    },
-  );
   if (shouldExtractMemory) {
-    await enqueueFrankJob(
+    await upsertQueueItem(
       "memory_extraction",
       {
         guildId: message.guild.id,
@@ -371,10 +350,10 @@ export async function ingestMessageCreate(message: Message) {
         sourceEventId: eventId,
       },
       {
-        queueKey: `memory:${message.channel.id}`,
+        dedupeKey: `memory:${message.channel.id}`,
         guildId: message.guild.id,
         channelId: message.channel.id,
-        runAt: new Date(Date.now() + FRANK_MEMORY_DEBOUNCE_MS),
+        availableAt: new Date(Date.now() + FRANK_MEMORY_DEBOUNCE_MS),
       },
     );
   }
@@ -384,10 +363,8 @@ export async function ingestMessageCreate(message: Message) {
     interruptReason,
     scheduledJobs: [
       "runtime_update",
-      "response_decision",
       ...(shouldExtractMemory ? ["memory_extraction"] : []),
     ],
-    settleMs,
   });
 }
 
@@ -423,10 +400,16 @@ export async function ingestMessageUpdate(
 
   const eventId = await appendFrankEvent(event);
   interruptChannelExecution(newMessage.channel.id, "message_edited");
-  await enqueueFrankJob("runtime_update", { eventId }, {
-    queueKey: `runtime:${eventId}`,
+  await supersedeActiveIntent({
     guildId: newMessage.guild.id,
     channelId: newMessage.channel.id,
+    reason: "message_edited",
+  });
+  await upsertQueueItem("runtime_update", { eventId }, {
+    dedupeKey: `runtime:${eventId}`,
+    guildId: newMessage.guild.id,
+    channelId: newMessage.channel.id,
+    availableAt: new Date(),
   });
 
   frankDebug("ingress", "message_update.output", { eventId });
@@ -455,10 +438,16 @@ export async function ingestMessageDelete(message: Message | PartialMessage) {
 
   const eventId = await appendFrankEvent(event);
   interruptChannelExecution(message.channel.id, "message_deleted");
-  await enqueueFrankJob("runtime_update", { eventId }, {
-    queueKey: `runtime:${eventId}`,
+  await supersedeActiveIntent({
     guildId: message.guild.id,
     channelId: message.channel.id,
+    reason: "message_deleted",
+  });
+  await upsertQueueItem("runtime_update", { eventId }, {
+    dedupeKey: `runtime:${eventId}`,
+    guildId: message.guild.id,
+    channelId: message.channel.id,
+    availableAt: new Date(),
   });
 
   frankDebug("ingress", "message_delete.output", { eventId });
@@ -492,10 +481,11 @@ export async function ingestReactionAdd(
   });
 
   const eventId = await appendFrankEvent(event);
-  await enqueueFrankJob("runtime_update", { eventId }, {
-    queueKey: `runtime:${eventId}`,
+  await upsertQueueItem("runtime_update", { eventId }, {
+    dedupeKey: `runtime:${eventId}`,
     guildId: message.guild.id,
     channelId: message.channel.id,
+    availableAt: new Date(),
   });
 
   frankDebug("ingress", "reaction_add.output", { eventId });

@@ -303,8 +303,11 @@ export function buildProfileFromEvidence(
 export async function retrieveProfileMemory(
   guildId: string,
   visibleMessages: VisibleMessage[],
+  options: {
+    focusUserId?: string | null;
+  } = {},
 ) {
-  const recentUserIds = [
+  const fallbackRecentUserIds = [
     ...new Set(
       [...visibleMessages]
         .reverse()
@@ -312,6 +315,9 @@ export async function retrieveProfileMemory(
         .map((message) => message.authorId),
     ),
   ].slice(0, 3);
+  const recentUserIds = options.focusUserId
+    ? [options.focusUserId]
+    : fallbackRecentUserIds;
   const profiles = await listProfilesForUsers(guildId, recentUserIds);
   const profilesById = new Map(
     profiles.map((profile) => [profile.subjectId, profile]),

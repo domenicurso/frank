@@ -1,166 +1,236 @@
 import { client } from "@/client";
 import {
   FRANK_BACKGROUND_JOB_CLAIM_BATCH,
-  FRANK_BACKGROUND_JOB_STALE_MS,
   FRANK_BACKGROUND_JOB_TIMEOUT_MS,
   FRANK_BURST_SETTLE_MS,
   FRANK_GENERATION_JOB_CLAIM_BATCH,
-  FRANK_GENERATION_JOB_STALE_MS,
-  FRANK_GENERATION_JOB_TIMEOUT_MS,
   FRANK_JOB_POLL_MS,
   FRANK_LIVE_JOB_CLAIM_BATCH,
-  FRANK_LIVE_JOB_STALE_MS,
   FRANK_LIVE_JOB_TIMEOUT_MS,
 } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
-import { summarizeBurstPlan, summarizeEvent, summarizeRuntime, summarizeSnapshot } from "@/frank/debugView";
-import { executeStreamedBurstPlan } from "@/frank/executor";
+import {
+  summarizeBurstPlan,
+  summarizeEvent,
+  summarizeRuntime,
+  summarizeSnapshot,
+} from "@/frank/debugView";
+import {
+  abortAllActiveExecutions,
+  executeStreamedBurstPlan,
+  hasActiveExecution,
+} from "@/frank/executor";
 import {
   isAbortLikeError,
   normalizeExecutionAbortReason,
 } from "@/frank/executionPolicy";
-import {
-  shouldDelayResponseDecision,
-  shouldSkipStaleResponseDecision,
-} from "@/frank/decisionPolicy";
-import { shouldSkipStaleGenerationSnapshot } from "@/frank/generationPolicy";
 import { getFrankGuildSettings } from "@/frank/config";
 import { extractMemoryFromChannel } from "@/frank/memory";
+import {
+  isStaleSettleCandidate,
+  shouldClearActiveIntent,
+  shouldSkipSettleForActiveIntent,
+  toIntentAbortStatus,
+} from "@/frank/queuePolicy";
+import {
+  cancelQueueItemsForIntent,
+  claimQueueItems,
+  clearChannelActiveIntent,
+  completeQueueItem,
+  createConversationIntent,
+  getChannelControl,
+  getConversationIntent,
+  getDefaultQueueLeaseMs,
+  getQueueItemsForChannel,
+  isQueueLeaseCurrent,
+  markIntentStatus,
+  recordSentBurstOnControl,
+  reconcileFrankQueueState,
+  requeueExpiredLeases,
+  saveChannelControl,
+  upsertQueueItem,
+} from "@/frank/queueStore";
 import { logError } from "@/log";
 import {
   applyDiscordEventToRuntime,
   markBurstInterrupted,
   markBurstSent,
-  releasePendingSnapshot,
 } from "@/frank/runtime";
 import { buildResponseSnapshot } from "@/frank/snapshot";
 import {
   appendFrankEvent,
-  claimFrankJobsByType,
-  completeFrankJob,
-  enqueueFrankJob,
-  failFrankJob,
   getChannelRuntime,
   getFrankEventById,
-  getFrankJobPayload,
-  releaseStaleFrankJobs,
   saveChannelRuntime,
 } from "@/frank/store";
 import type {
-  CharacterGenerationJob,
   DiscordEvent,
-  FrankJobType,
+  GenerateIntentJob,
   MemoryExtractionJob,
-  ResponseDecisionJob,
+  QueueLease,
   RuntimeUpdateJob,
+  SettleChannelJob,
   SystemEvent,
 } from "@/frank/types";
+import { randomUUID } from "node:crypto";
+
+type QueueWorker = {
+  queueName: "runtime_update" | "settle_channel" | "generate_intent" | "memory_extraction";
+  lane: "live" | "generation" | "background";
+  claimBatch: number;
+  timeoutMs: number;
+};
 
 type WorkerLane = {
   name: "live" | "generation" | "background";
-  jobTypes: FrankJobType[];
-  claimBatch: number;
-  timeoutMs: number;
-  staleMs: number;
+  workers: QueueWorker[];
+};
+
+const QUEUE_WORKERS: Record<QueueWorker["queueName"], QueueWorker> = {
+  runtime_update: {
+    queueName: "runtime_update",
+    lane: "live",
+    claimBatch: FRANK_LIVE_JOB_CLAIM_BATCH,
+    timeoutMs: FRANK_LIVE_JOB_TIMEOUT_MS,
+  },
+  settle_channel: {
+    queueName: "settle_channel",
+    lane: "live",
+    claimBatch: FRANK_LIVE_JOB_CLAIM_BATCH,
+    timeoutMs: FRANK_LIVE_JOB_TIMEOUT_MS,
+  },
+  generate_intent: {
+    queueName: "generate_intent",
+    lane: "generation",
+    claimBatch: FRANK_GENERATION_JOB_CLAIM_BATCH,
+    timeoutMs: getDefaultQueueLeaseMs("generate_intent"),
+  },
+  memory_extraction: {
+    queueName: "memory_extraction",
+    lane: "background",
+    claimBatch: FRANK_BACKGROUND_JOB_CLAIM_BATCH,
+    timeoutMs: FRANK_BACKGROUND_JOB_TIMEOUT_MS,
+  },
 };
 
 const WORKER_LANES: WorkerLane[] = [
   {
     name: "live",
-    jobTypes: ["runtime_update", "response_decision"],
-    claimBatch: FRANK_LIVE_JOB_CLAIM_BATCH,
-    timeoutMs: FRANK_LIVE_JOB_TIMEOUT_MS,
-    staleMs: FRANK_LIVE_JOB_STALE_MS,
+    workers: [QUEUE_WORKERS.runtime_update, QUEUE_WORKERS.settle_channel],
   },
   {
     name: "generation",
-    jobTypes: ["character_generation"],
-    claimBatch: FRANK_GENERATION_JOB_CLAIM_BATCH,
-    timeoutMs: FRANK_GENERATION_JOB_TIMEOUT_MS,
-    staleMs: FRANK_GENERATION_JOB_STALE_MS,
+    workers: [QUEUE_WORKERS.generate_intent],
   },
   {
     name: "background",
-    jobTypes: ["memory_extraction"],
-    claimBatch: FRANK_BACKGROUND_JOB_CLAIM_BATCH,
-    timeoutMs: FRANK_BACKGROUND_JOB_TIMEOUT_MS,
-    staleMs: FRANK_BACKGROUND_JOB_STALE_MS,
+    workers: [QUEUE_WORKERS.memory_extraction],
   },
 ];
 
-const workerIntervals = new Map<WorkerLane["name"], NodeJS.Timeout>();
-const tickingLanes = new Set<WorkerLane["name"]>();
+const queueIntervals = new Map<string, NodeJS.Timeout>();
+const tickingLanes = new Set<string>();
+const inflightControllers = new Map<string, AbortController>();
+const inflightPromises = new Map<string, Promise<void>>();
+let shutdownController: AbortController | null = null;
+let shuttingDown = false;
 
 export function startFrankWorker() {
-  if (workerIntervals.size > 0) return;
+  if (queueIntervals.size > 0) {
+    return;
+  }
+
+  shuttingDown = false;
+  shutdownController = new AbortController();
+  void reconcileFrankQueueState().catch((error) => {
+    logError("worker", "Failed to reconcile Frank queue state", error);
+  });
 
   for (const lane of WORKER_LANES) {
-    workerIntervals.set(
+    queueIntervals.set(
       lane.name,
       setInterval(() => {
-        void processFrankJobsOnce(lane);
+        void processFrankLaneOnce(lane);
       }, FRANK_JOB_POLL_MS),
     );
-
-    void processFrankJobsOnce(lane);
+    void processFrankLaneOnce(lane);
   }
 }
 
-export function stopFrankWorker() {
-  for (const interval of workerIntervals.values()) {
+export async function stopFrankWorker() {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+
+  for (const interval of queueIntervals.values()) {
     clearInterval(interval);
   }
-  workerIntervals.clear();
+  queueIntervals.clear();
   tickingLanes.clear();
+
+  shutdownController?.abort("worker_shutdown");
+
+  for (const controller of inflightControllers.values()) {
+    controller.abort("worker_shutdown");
+  }
+
+  await abortAllActiveExecutions("worker_shutdown");
+  await Promise.allSettled([...inflightPromises.values()]);
+  inflightControllers.clear();
+  inflightPromises.clear();
 }
 
-export async function processFrankJobsOnce(
-  lane: WorkerLane = WORKER_LANES[0]!,
-) {
-  if (tickingLanes.has(lane.name)) return;
+async function processFrankLaneOnce(lane: WorkerLane) {
+  if (shuttingDown || tickingLanes.has(lane.name)) {
+    return;
+  }
+
   tickingLanes.add(lane.name);
 
   try {
-    await releaseStaleFrankJobs(lane.jobTypes, lane.staleMs);
-    const jobs = await claimFrankJobsByType(lane.claimBatch, lane.jobTypes);
-    for (const job of jobs) {
-      const startedAt = Date.now();
-      try {
-        frankDebug("worker", "job.start", {
-          jobId: job.id,
-          jobType: job.jobType,
-          lane: lane.name,
-          channelId: job.channelId,
-          guildId: job.guildId,
-        });
-        await runFrankJobWithTimeout(
-          lane,
-          job.jobType,
-          getFrankJobPayload(job),
-        );
-        await completeFrankJob(job.id);
-        frankDebug("worker", "job.complete", {
-          durationMs: Date.now() - startedAt,
-          jobId: job.id,
-          jobType: job.jobType,
-          lane: lane.name,
-        });
-      } catch (error) {
-        logError("worker", `Job ${job.id} failed`, error, {
-          durationMs: Date.now() - startedAt,
-          jobId: job.id,
-          jobType: job.jobType,
-          lane: lane.name,
-          channelId: job.channelId,
-          guildId: job.guildId,
-        });
-        frankDebug("worker", "job.error", {
-          jobId: job.id,
-          jobType: job.jobType,
-          lane: lane.name,
-          error,
-        });
-        await failFrankJob(job.id, error);
+    await requeueExpiredLeases(lane.workers.map((worker) => worker.queueName));
+
+    for (const worker of lane.workers) {
+      const leases = await claimQueueItems(
+        worker.queueName,
+        `${lane.name}:${randomUUID()}`,
+        worker.claimBatch,
+        worker.timeoutMs,
+      );
+
+      for (const lease of leases) {
+        const startedAt = Date.now();
+        try {
+          frankDebug("worker", "queue.start", {
+            queueName: worker.queueName,
+            leaseId: lease.id,
+            channelId: lease.channelId,
+            intentId: lease.intentId,
+          });
+          await runQueueLease(worker, lease);
+          await completeQueueItem(lease.id, lease.leaseOwner);
+          frankDebug("worker", "queue.complete", {
+            durationMs: Date.now() - startedAt,
+            queueName: worker.queueName,
+            leaseId: lease.id,
+          });
+        } catch (error) {
+          const normalized =
+            error instanceof Error ? error.stack || error.message : String(error);
+          logError("worker", `Queue item ${lease.id} failed`, error, {
+            queueName: worker.queueName,
+            leaseId: lease.id,
+            channelId: lease.channelId,
+            intentId: lease.intentId,
+            durationMs: Date.now() - startedAt,
+          });
+          frankDebug("worker", "queue.error", {
+            queueName: worker.queueName,
+            leaseId: lease.id,
+            error: normalized,
+          });
+        }
       }
     }
   } finally {
@@ -168,62 +238,59 @@ export async function processFrankJobsOnce(
   }
 }
 
-async function runFrankJobWithTimeout(
-  lane: WorkerLane,
-  jobType: FrankJobType,
-  payload:
-    | RuntimeUpdateJob
-    | ResponseDecisionJob
-    | CharacterGenerationJob
-    | MemoryExtractionJob,
-) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => {
-    controller.abort("worker_timeout");
-  }, lane.timeoutMs);
+async function runQueueLease(worker: QueueWorker, lease: QueueLease) {
+  const timeoutSignal = AbortSignal.timeout(worker.timeoutMs);
+  const localController = new AbortController();
+  inflightControllers.set(lease.id, localController);
+
+  const signal = AbortSignal.any(
+    [
+      timeoutSignal,
+      localController.signal,
+      shutdownController?.signal,
+    ].filter(Boolean) as AbortSignal[],
+  );
+
+  const task = (async () => {
+    switch (worker.queueName) {
+      case "runtime_update":
+        await handleRuntimeUpdate(lease, lease.payload as RuntimeUpdateJob, signal);
+        return;
+      case "settle_channel":
+        await handleSettleChannel(lease, lease.payload as SettleChannelJob, signal);
+        return;
+      case "generate_intent":
+        await handleGenerateIntent(lease, lease.payload as GenerateIntentJob, signal);
+        return;
+      case "memory_extraction":
+        await handleMemoryExtraction(
+          lease,
+          lease.payload as MemoryExtractionJob,
+          signal,
+        );
+        return;
+    }
+  })();
+
+  inflightPromises.set(lease.id, task);
 
   try {
-    await processFrankJob(jobType, payload, {
-      abortSignal: controller.signal,
-    });
+    await task;
   } finally {
-    clearTimeout(timeout);
+    inflightControllers.delete(lease.id);
+    inflightPromises.delete(lease.id);
   }
 }
 
-async function processFrankJob(
-  jobType: FrankJobType,
-  payload:
-    | RuntimeUpdateJob
-    | ResponseDecisionJob
-    | CharacterGenerationJob
-    | MemoryExtractionJob,
-  options: {
-    abortSignal?: AbortSignal;
-  } = {},
+async function ensureLeaseCurrent(lease: QueueLease) {
+  return isQueueLeaseCurrent(lease.id, lease.leaseOwner);
+}
+
+async function handleRuntimeUpdate(
+  lease: QueueLease,
+  payload: RuntimeUpdateJob,
+  _signal: AbortSignal,
 ) {
-  switch (jobType) {
-    case "runtime_update":
-      await handleRuntimeUpdate(payload as RuntimeUpdateJob);
-      return;
-    case "response_decision":
-      await handleResponseDecision(payload as ResponseDecisionJob);
-      return;
-    case "character_generation":
-      await handleCharacterGeneration(
-        payload as CharacterGenerationJob,
-        options,
-      );
-      return;
-    case "memory_extraction":
-      await handleMemoryExtraction(payload as MemoryExtractionJob, options);
-      return;
-    default:
-      throw new Error(`Unknown Frank job type: ${jobType}`);
-  }
-}
-
-async function handleRuntimeUpdate(payload: RuntimeUpdateJob) {
   const event = await getFrankEventById(payload.eventId);
   if (
     !event ||
@@ -234,72 +301,137 @@ async function handleRuntimeUpdate(payload: RuntimeUpdateJob) {
     return;
   }
 
+  if (!(await ensureLeaseCurrent(lease))) {
+    return;
+  }
+
   const runtime = await getChannelRuntime(event.guildId, event.channelId);
   const nextRuntime = applyDiscordEventToRuntime(runtime, event as DiscordEvent);
   await saveChannelRuntime(nextRuntime);
+
+  const control = await getChannelControl(event.guildId, event.channelId);
+  const nextControl = {
+    ...control,
+    channelRevision: control.channelRevision + 1,
+    lastSeenEventId: payload.eventId,
+    lastHumanMessageId:
+      event.type === "message_create" ? event.messageId : control.lastHumanMessageId,
+    lastHumanMessageAt:
+      event.type === "message_create" ? event.createdAt : control.lastHumanMessageAt,
+  };
+
+  let settleAt: Date | null = null;
+  if (event.type === "message_create") {
+    settleAt = new Date(Date.now() + getSettleDelayMs(event, nextRuntime));
+  } else if (event.type === "message_update" || event.type === "message_delete") {
+    settleAt = new Date();
+  }
+
+  if (settleAt) {
+    nextControl.pendingSettleAt = settleAt.toISOString();
+  }
+
+  await saveChannelControl(nextControl);
+
+  if (settleAt && (await ensureLeaseCurrent(lease))) {
+    await upsertQueueItem(
+      "settle_channel",
+      {
+        guildId: event.guildId,
+        channelId: event.channelId,
+        sourceEventId: payload.eventId,
+        channelRevision: nextControl.channelRevision,
+      },
+      {
+        dedupeKey: `settle:${event.channelId}`,
+        guildId: event.guildId,
+        channelId: event.channelId,
+        availableAt: settleAt,
+      },
+    );
+  }
+
   frankDebug("worker", "runtime_update.output", {
     eventId: payload.eventId,
     eventType: event.type,
     channelId: event.channelId,
     runtime: summarizeRuntime(nextRuntime),
+    channelRevision: nextControl.channelRevision,
+    pendingSettleAt: nextControl.pendingSettleAt,
   });
 }
 
-async function handleResponseDecision(payload: ResponseDecisionJob) {
-  const settings = await getFrankGuildSettings(payload.guildId);
-  const runtime = await getChannelRuntime(payload.guildId, payload.channelId);
-  const sourceEvent = await getFrankEventById(payload.sourceEventId);
+async function handleSettleChannel(
+  lease: QueueLease,
+  payload: SettleChannelJob,
+  signal: AbortSignal,
+) {
+  if (!(await ensureLeaseCurrent(lease))) {
+    return;
+  }
 
-  if (shouldDelayResponseDecision(runtime)) {
-    await enqueueFrankJob("response_decision", payload, {
-      queueKey: `decision:${payload.channelId}`,
-      guildId: payload.guildId,
-      channelId: payload.channelId,
-      runAt: new Date(Date.now() + 250),
-    });
-    frankDebug("worker", "response_decision.delayed_active_snapshot", {
+  const settings = await getFrankGuildSettings(payload.guildId);
+  let control = await getChannelControl(payload.guildId, payload.channelId);
+  let runtime = await getChannelRuntime(payload.guildId, payload.channelId);
+
+  if (isStaleSettleCandidate(payload, control)) {
+    frankDebug("worker", "settle_channel.stale_candidate", {
       payload,
-      activeSnapshotId: runtime.activeSnapshotId,
+      control,
     });
     return;
   }
 
   if (
-    shouldSkipStaleResponseDecision({
-      runtime,
-      sourceEvent,
-    })
+    control.pendingSettleAt &&
+    Date.now() < new Date(control.pendingSettleAt).getTime()
   ) {
-    frankDebug("worker", "response_decision.skipped_stale", {
-      payload,
-      sourceEvent: summarizeEvent(sourceEvent),
-      runtime: summarizeRuntime(runtime),
+    await upsertQueueItem("settle_channel", payload, {
+      dedupeKey: `settle:${payload.channelId}`,
+      guildId: payload.guildId,
+      channelId: payload.channelId,
+      availableAt: new Date(control.pendingSettleAt),
     });
     return;
   }
 
-  const lastHumanAt = runtime.lastHumanMessageAt
-    ? new Date(runtime.lastHumanMessageAt).getTime()
-    : 0;
-  const settleMs = getSettleMs(sourceEvent, runtime);
-  frankDebug("worker", "response_decision.input", {
-    payload,
-    settleMs,
-    sourceEvent: summarizeEvent(sourceEvent),
-    runtime: summarizeRuntime(runtime),
-  });
+  if (control.activeIntentId) {
+    const activeIntent = await getConversationIntent(control.activeIntentId);
+    const hasGenerateQueue = (
+      await getQueueItemsForChannel(payload.channelId, ["generate_intent"])
+    ).some((item) => item.intentId === control.activeIntentId);
+    const activeExecution = hasActiveExecution(payload.channelId);
 
-  if (Date.now() - lastHumanAt < settleMs) {
-    await enqueueFrankJob("response_decision", payload, {
-      queueKey: `decision:${payload.channelId}`,
-      guildId: payload.guildId,
-      channelId: payload.channelId,
-      runAt: new Date(lastHumanAt + settleMs),
-    });
-    frankDebug("worker", "response_decision.rescheduled", {
+    if (
+      shouldClearActiveIntent({
+        intentStatus: activeIntent?.status ?? null,
+        hasGenerateQueue,
+        hasActiveExecution: activeExecution,
+      })
+    ) {
+      if (activeIntent && ["pending", "generating", "sending"].includes(activeIntent.status)) {
+        await markIntentStatus(activeIntent.id, "aborted", "stale_active_intent");
+      }
+      await clearChannelActiveIntent(payload.channelId);
+      control = await getChannelControl(payload.guildId, payload.channelId);
+      runtime = {
+        ...runtime,
+        activeIntentId: null,
+        activeIntentRevision: null,
+        activeSnapshotId: null,
+        activeSnapshotCreatedAt: null,
+      };
+      await saveChannelRuntime(runtime);
+      frankDebug("worker", "settle_channel.cleared_stale_active_intent", {
+        channelId: payload.channelId,
+      });
+    }
+  }
+
+  if (shouldSkipSettleForActiveIntent(control, payload)) {
+    frankDebug("worker", "settle_channel.skipped_active_intent", {
       payload,
-      lastHumanAt,
-      settleMs,
+      control,
     });
     return;
   }
@@ -310,7 +442,7 @@ async function handleResponseDecision(payload: ResponseDecisionJob) {
     client.user?.id ?? "frank",
   );
 
-  const event: SystemEvent = {
+  const responseEvent: SystemEvent = {
     type: "response_decision",
     eventKey: `response_decision:${payload.channelId}:${Date.now()}`,
     channelId: payload.channelId,
@@ -323,124 +455,160 @@ async function handleResponseDecision(payload: ResponseDecisionJob) {
     snapshotId: snapshot?.id ?? null,
     createdAt: new Date().toISOString(),
   };
-  await appendFrankEvent(event);
-  frankDebug("worker", "response_decision.output", {
-    payload,
-    decision: event.decision,
-    snapshotId: snapshot?.id ?? null,
+  await appendFrankEvent(responseEvent);
+
+  if (!snapshot || signal.aborted || !(await ensureLeaseCurrent(lease))) {
+    const freshControl = await getChannelControl(payload.guildId, payload.channelId);
+    if (
+      freshControl.lastSeenEventId === payload.sourceEventId &&
+      freshControl.channelRevision === payload.channelRevision
+    ) {
+      await saveChannelControl({
+        ...freshControl,
+        pendingSettleAt: null,
+      });
+    }
+    frankDebug("worker", "settle_channel.noop", {
+      payload,
+      snapshotId: snapshot?.id ?? null,
+    });
+    return;
+  }
+
+  const sourceEvent = await getFrankEventById(payload.sourceEventId);
+  const sourceMessageId =
+    sourceEvent && "messageId" in sourceEvent ? sourceEvent.messageId : null;
+  const intent = await createConversationIntent({
+    control,
+    sourceEventId: payload.sourceEventId,
+    sourceMessageId,
+    snapshot,
   });
 
-  if (!snapshot) return;
+  await saveChannelRuntime({
+    ...runtime,
+    activeIntentId: intent.id,
+    activeIntentRevision: control.channelRevision,
+    activeSnapshotId: snapshot.id,
+    activeSnapshotCreatedAt: snapshot.createdAt,
+  });
 
-  runtime.activeSnapshotId = snapshot.id;
-  await saveChannelRuntime(runtime);
-  const responseDecisionAt = new Date().toISOString();
-
-  await enqueueFrankJob(
-    "character_generation",
-    { snapshot, responseDecisionAt },
+  await upsertQueueItem(
+    "generate_intent",
     {
-      queueKey: `generation:${snapshot.channelId}`,
-      guildId: snapshot.guildId,
-      channelId: snapshot.channelId,
+      guildId: payload.guildId,
+      channelId: payload.channelId,
+      intentId: intent.id,
+      channelRevision: control.channelRevision,
+      responseDecisionAt: new Date().toISOString(),
+    },
+    {
+      dedupeKey: `generate:${intent.id}`,
+      guildId: payload.guildId,
+      channelId: payload.channelId,
+      intentId: intent.id,
+      availableAt: new Date(),
     },
   );
+
+  frankDebug("worker", "settle_channel.intent_created", {
+    payload,
+    intentId: intent.id,
+    snapshot: summarizeSnapshot(snapshot),
+  });
 }
 
-async function handleCharacterGeneration(
-  payload: CharacterGenerationJob,
-  options: {
-    abortSignal?: AbortSignal;
-  } = {},
+async function handleGenerateIntent(
+  lease: QueueLease,
+  payload: GenerateIntentJob,
+  signal: AbortSignal,
 ) {
-  const settings = await getFrankGuildSettings(payload.snapshot.guildId);
-  const runtime = await getChannelRuntime(
-    payload.snapshot.guildId,
-    payload.snapshot.channelId,
-  );
+  if (!(await ensureLeaseCurrent(lease))) {
+    return;
+  }
 
+  const intent = await getConversationIntent(payload.intentId);
+  const control = await getChannelControl(payload.guildId, payload.channelId);
   if (
-    shouldSkipStaleGenerationSnapshot({
-      runtime,
-      snapshot: payload.snapshot,
-    })
+    !intent ||
+    intent.status !== "pending" ||
+    control.activeIntentId !== intent.id ||
+    control.activeIntentRevision !== intent.channelRevision ||
+    intent.channelRevision < control.channelRevision
   ) {
-    const nextRuntime = releasePendingSnapshot(runtime, payload.snapshot.id);
-    if (nextRuntime !== runtime) {
-      await saveChannelRuntime(nextRuntime);
-    }
-    frankDebug("worker", "character_generation.stale_snapshot", {
-      channelId: payload.snapshot.channelId,
-      snapshotId: payload.snapshot.id,
-      snapshotCreatedAt: payload.snapshot.createdAt,
-      runtime: summarizeRuntime(runtime),
+    frankDebug("worker", "generate_intent.stale_on_start", {
+      payload,
+      control,
+      intent,
     });
     return;
   }
 
-  if (
-    runtime.activeSnapshotId &&
-    runtime.activeSnapshotId !== payload.snapshot.id
-  ) {
-    frankDebug("worker", "character_generation.superseded", {
-      channelId: payload.snapshot.channelId,
-      snapshotId: payload.snapshot.id,
-      activeSnapshotId: runtime.activeSnapshotId,
-    });
-    return;
-  }
+  await markIntentStatus(intent.id, "generating");
+  const settings = await getFrankGuildSettings(payload.guildId);
+  const runtime = await getChannelRuntime(payload.guildId, payload.channelId);
+  const executionController = new AbortController();
+  const executionSignal = AbortSignal.any([signal, executionController.signal]);
+  let sendingMarked = false;
 
-  if (!runtime.activeSnapshotId) {
-    runtime.activeSnapshotId = payload.snapshot.id;
-    await saveChannelRuntime(runtime);
-  }
-  frankDebug("worker", "character_generation.input", {
-    snapshot: summarizeSnapshot(payload.snapshot),
+  frankDebug("worker", "generate_intent.input", {
+    intentId: intent.id,
+    snapshot: summarizeSnapshot(intent.snapshot),
     settings,
   });
 
   const result = await executeStreamedBurstPlan({
-    snapshot: payload.snapshot,
+    snapshot: intent.snapshot,
     typingStartedAt: payload.responseDecisionAt,
     maxBurstMessages: settings.burstResponsesEnabled
       ? settings.maxBurstMessages
       : 1,
     reactionsEnabled: settings.reactionsEnabled,
-    abortSignal: options.abortSignal,
+    abortSignal: executionSignal,
+    beforeSendChunk: async ({ isFirst }) => {
+      const freshControl = await getChannelControl(payload.guildId, payload.channelId);
+      if (
+        freshControl.activeIntentId !== intent.id ||
+        freshControl.activeIntentRevision !== intent.channelRevision
+      ) {
+        executionController.abort("channel_shift");
+        return;
+      }
+
+      if (isFirst && !sendingMarked) {
+        sendingMarked = true;
+        await markIntentStatus(intent.id, "sending");
+      }
+    },
   }).catch((error) => {
-    if (options.abortSignal?.aborted || isAbortLikeError(error)) {
+    if (executionSignal.aborted || isAbortLikeError(error)) {
       return {
         plan: null,
         sentMessageIds: [] as string[],
         sentMessages: [] as Array<{ id: string; text: string; createdAt: string }>,
         aborted: true,
         reason: normalizeExecutionAbortReason(
-          options.abortSignal?.reason ?? error,
+          executionSignal.reason ?? error,
         ),
       };
     }
     throw error;
   });
 
-  frankDebug("worker", "character_generation.output", {
+  frankDebug("worker", "generate_intent.output", {
+    intentId: intent.id,
     aborted: result.aborted,
     reason: result.reason,
     plan: summarizeBurstPlan(result.plan),
     sentMessageIds: result.sentMessageIds,
-    sentMessages: result.sentMessages.map((message) => message.text),
   });
-
-  const freshRuntime = await getChannelRuntime(
-    payload.snapshot.guildId,
-    payload.snapshot.channelId,
-  );
 
   if (result.plan) {
     const event: SystemEvent = {
       type: "burst_generated",
-      eventKey: `burst_generated:${payload.snapshot.id}`,
-      channelId: payload.snapshot.channelId,
-      snapshotId: payload.snapshot.id,
+      eventKey: `burst_generated:${intent.snapshot.id}`,
+      channelId: intent.channelId,
+      snapshotId: intent.snapshot.id,
       burstPlan: result.plan,
       createdAt: new Date().toISOString(),
     };
@@ -451,75 +619,123 @@ async function handleCharacterGeneration(
     const remainingChunks = (result.plan?.chunks ?? [])
       .slice(result.sentMessageIds.length)
       .map((chunk) => chunk.text);
+    const freshRuntime = await getChannelRuntime(payload.guildId, payload.channelId);
     const nextRuntime = markBurstInterrupted(
       freshRuntime,
-      payload.snapshot,
+      intent.snapshot,
       remainingChunks,
       new Date().toISOString(),
     );
     await saveChannelRuntime(nextRuntime);
 
+    const nextStatus = toIntentAbortStatus(result.reason);
+    await markIntentStatus(intent.id, nextStatus, result.reason ?? "aborted");
+    await cancelQueueItemsForIntent(intent.id);
+    await clearChannelActiveIntent(payload.channelId);
+
     const event: SystemEvent = {
       type: "burst_aborted",
-      eventKey: `burst_aborted:${payload.snapshot.id}:${Date.now()}`,
-      channelId: payload.snapshot.channelId,
-      snapshotId: payload.snapshot.id,
+      eventKey: `burst_aborted:${intent.snapshot.id}:${Date.now()}`,
+      channelId: intent.channelId,
+      snapshotId: intent.snapshot.id,
       remainingChunks,
       reason: result.reason ?? "manual_abort",
       createdAt: new Date().toISOString(),
     };
     await appendFrankEvent(event);
+
+    const freshControl = await getChannelControl(payload.guildId, payload.channelId);
+    if (freshControl.lastSeenEventId) {
+      const availableAt = new Date();
+      await saveChannelControl({
+        ...freshControl,
+        pendingSettleAt: availableAt.toISOString(),
+      });
+      await upsertQueueItem(
+        "settle_channel",
+        {
+          guildId: payload.guildId,
+          channelId: payload.channelId,
+          sourceEventId: freshControl.lastSeenEventId,
+          channelRevision: freshControl.channelRevision,
+        },
+        {
+          dedupeKey: `settle:${payload.channelId}`,
+          guildId: payload.guildId,
+          channelId: payload.channelId,
+          availableAt,
+        },
+      );
+    }
     return;
   }
 
+  const sentAt = new Date().toISOString();
+  const freshRuntime = await getChannelRuntime(payload.guildId, payload.channelId);
   const nextRuntime = markBurstSent(
     freshRuntime,
     result.sentMessages,
-    new Date().toISOString(),
+    sentAt,
     client.user?.id ?? "frank",
     client.user?.globalName ?? client.user?.username ?? "Frank",
     client.user?.username ?? "frank",
   );
   await saveChannelRuntime(nextRuntime);
+  await markIntentStatus(intent.id, "sent");
+  await recordSentBurstOnControl({
+    channelId: payload.channelId,
+    sentAt,
+    lastBotMessageId: result.sentMessageIds[result.sentMessageIds.length - 1] ?? null,
+  });
 }
 
 async function handleMemoryExtraction(
+  lease: QueueLease,
   payload: MemoryExtractionJob,
-  options: {
-    abortSignal?: AbortSignal;
-  } = {},
+  signal: AbortSignal,
 ) {
+  if (!(await ensureLeaseCurrent(lease))) {
+    return;
+  }
+
   frankDebug("worker", "memory_extraction.input", payload);
   await extractMemoryFromChannel(
     payload.guildId,
     payload.channelId,
     payload.sourceEventId,
-    {
-      abortSignal: options.abortSignal,
-    },
+    { abortSignal: signal },
   );
   frankDebug("worker", "memory_extraction.output", payload);
 }
 
-function getSettleMs(
-  sourceEvent: Awaited<ReturnType<typeof getFrankEventById>>,
+function getSettleDelayMs(
+  event: Extract<DiscordEvent, { type: "message_create" }>,
   runtime: Awaited<ReturnType<typeof getChannelRuntime>>,
 ) {
-  if (sourceEvent && sourceEvent.type === "message_create") {
-    if (sourceEvent.mentionsBot) {
-      return 250;
+  if (event.mentionsBot) {
+    if (isShortSummon(event.content)) {
+      return FRANK_BURST_SETTLE_MS;
     }
+    return 250;
+  }
 
-    if (
-      sourceEvent.replyToMessageId &&
-      runtime.visibleMessages.some(
-        (message) =>
-          message.id === sourceEvent.replyToMessageId && message.fromBot,
-      )
-    ) {
-      return 250;
-    }
+  if (
+    event.replyToMessageId &&
+    runtime.visibleMessages.some(
+      (message) => message.id === event.replyToMessageId && message.fromBot,
+    )
+  ) {
+    return 250;
   }
 
   return FRANK_BURST_SETTLE_MS;
+}
+
+function isShortSummon(content: string) {
+  const words = content
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter(Boolean);
+
+  return words.length <= 2 && words.every((word) => word === "frank" || word === "botello");
 }

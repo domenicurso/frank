@@ -34,6 +34,8 @@ export function summarizeRuntime(runtime: ChannelRuntimeProjection) {
     lastBotMessageId: runtime.lastBotMessageId,
     lastBotSentAt: runtime.lastBotSentAt,
     lastHumanMessageAt: runtime.lastHumanMessageAt,
+    activeIntentId: runtime.activeIntentId,
+    activeIntentRevision: runtime.activeIntentRevision,
     activeSnapshotId: runtime.activeSnapshotId,
     pendingIntentChunks: runtime.pendingIntent?.remainingChunks.length ?? 0,
     visibleMessageCount: runtime.visibleMessages.length,
