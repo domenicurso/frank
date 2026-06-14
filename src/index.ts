@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const startTime = Date.now();
+const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 const now = new Date()
   .toLocaleString("en-US", {
@@ -253,12 +254,43 @@ console.log(chalk.cyan.bold(`\nInitialized in ${Date.now() - startTime}ms!\n`));
 
 // Graceful shutdown handling
 let shutdownStarted = false;
+let forcedShutdownTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function withShutdownTimeout<T>(label: string, task: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${SHUTDOWN_TIMEOUT_MS}ms`));
+    }, SHUTDOWN_TIMEOUT_MS);
+    timeout.unref?.();
+
+    void task.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
 
 async function gracefulShutdown(signal: string) {
   if (shutdownStarted) {
     return;
   }
   shutdownStarted = true;
+
+  forcedShutdownTimer = setTimeout(() => {
+    console.error(
+      chalk.red(
+        `[${signal}] Shutdown exceeded ${SHUTDOWN_TIMEOUT_MS}ms. Forcing exit.`,
+      ),
+    );
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+  forcedShutdownTimer.unref?.();
 
   console.log(
     chalk.yellow(`\n[${signal}] Received shutdown signal. Cleaning up...`),
@@ -276,20 +308,28 @@ async function gracefulShutdown(signal: string) {
     stopProcessingCleanup();
 
     console.log(chalk.blue("Stopping Frank worker..."));
-    await stopFrankWorker();
+    await withShutdownTimeout("Stopping Frank worker", stopFrankWorker());
 
     // Gracefully close Discord client
     console.log(chalk.blue("Destroying Discord client..."));
     client.destroy();
 
     console.log(chalk.blue("Closing database connection..."));
-    await sequelize.close();
+    await withShutdownTimeout("Closing database connection", sequelize.close());
 
     console.log(chalk.green("Cleanup completed successfully"));
-    process.exitCode = 0;
+    if (forcedShutdownTimer) {
+      clearTimeout(forcedShutdownTimer);
+      forcedShutdownTimer = null;
+    }
+    process.exit(0);
   } catch (error) {
     console.error(chalk.red("Error during cleanup:"), error);
-    process.exitCode = 1;
+    if (forcedShutdownTimer) {
+      clearTimeout(forcedShutdownTimer);
+      forcedShutdownTimer = null;
+    }
+    process.exit(1);
   }
 }
 

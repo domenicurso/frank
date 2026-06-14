@@ -58,7 +58,7 @@ function buildVisibleMessages(
   focusMessages: VisibleMessage[],
   compact: boolean,
 ) {
-  const tailCount = compact ? 2 : 4;
+  const tailCount = compact ? 6 : 16;
   const byId = new Map<string, VisibleMessage>();
 
   for (const message of focusMessages) {

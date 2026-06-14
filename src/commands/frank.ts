@@ -5,7 +5,6 @@ import { parseJson } from "@/frank/json";
 import { createEmbed } from "@/utils/embeds";
 import {
   ChatInputCommandInteraction,
-  GuildMember,
   MessageFlags,
   PermissionFlagsBits,
   SlashCommandBuilder,
@@ -151,8 +150,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const member = interaction.member as GuildMember;
-  if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
     await interaction.reply({
       embeds: [
         createEmbed(

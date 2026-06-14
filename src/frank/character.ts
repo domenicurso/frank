@@ -12,8 +12,11 @@ import { frankDebug } from "@/frank/debug";
 import { summarizeBurstPlan, summarizeSnapshot } from "@/frank/debugView";
 import { humanizedUserToken } from "@/frank/messageContext";
 import { FRANK_CHARACTER_MODEL } from "@/frank/models";
-import { buildCharacterSystemPrompt, buildCharacterUserPrompt } from "@/frank/prompt";
-import type { ResponseSnapshot, VisibleMessage } from "@/frank/types";
+import {
+  buildCharacterSystemPrompt,
+  buildCharacterUserPrompt,
+} from "@/frank/prompt";
+import type { ResponseSnapshot } from "@/frank/types";
 
 const openrouter = createOpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY || "",
@@ -23,12 +26,13 @@ const burstPlanSchema = z.object({
   chunks: z
     .array(
       z.object({
-        text: z.string().min(1),
-        pauseMs: z.number().int().min(0).max(4000).optional(),
+        text: z.string().optional().default(""),
+        pauseMs: z.number().int().min(0).max(4_000).optional(),
       }),
     )
-    .min(1)
-    .max(FRANK_MAX_BURST_MESSAGES),
+    .max(FRANK_MAX_BURST_MESSAGES)
+    .optional()
+    .default([]),
   reactionEmoji: z.string().max(24).nullable().optional(),
 });
 
@@ -109,7 +113,9 @@ function collectRecentVisualMedia(snapshot: ResponseSnapshot) {
   return media;
 }
 
-function buildCharacterUserMessages(snapshot: ResponseSnapshot): ModelMessage[] {
+function buildCharacterUserMessages(
+  snapshot: ResponseSnapshot,
+): ModelMessage[] {
   const userPrompt = buildCharacterUserPrompt(snapshot);
   const media = collectRecentVisualMedia(snapshot);
   const userContent: Array<
@@ -143,9 +149,7 @@ function buildCharacterUserMessages(snapshot: ResponseSnapshot): ModelMessage[] 
     }
   }
 
-  return [
-    { role: "user", content: userContent },
-  ];
+  return [{ role: "user", content: userContent }];
 }
 
 export function createBurstPlanStream(
@@ -173,13 +177,19 @@ export function createBurstPlanStream(
   });
 
   const result = streamObject({
-    model: openrouter(FRANK_CHARACTER_MODEL),
+    model: openrouter(FRANK_CHARACTER_MODEL, {
+      structuredOutputs: { strict: true },
+    }),
     schema: burstPlanSchema,
     temperature: 0.8,
     system: systemPrompt,
     abortSignal:
       options.abortSignal ?? AbortSignal.timeout(FRANK_CHARACTER_TIMEOUT_MS),
     messages,
+    experimental_repairText: async ({ text, error: _error }) => {
+      frankDebug("character", "repair.text", { text });
+      return text;
+    },
   });
 
   return Object.assign(result, {

@@ -154,4 +154,42 @@ describe("snapshot concern focus", () => {
     expect(snapshot?.focusMessages?.map((message) => message.id)).toEqual(["m1", "m2"]);
     expect(snapshot?.anchorMessageId).toBe("m2");
   });
+
+  test("includes a wider recent-message tail in snapshot context", async () => {
+    const runtime = makeRuntime(
+      Array.from({ length: 10 }, (_, index) =>
+        makeMessage({
+          id: `m${index + 1}`,
+          content: `message ${index + 1}`,
+          mentionsBot: index === 1,
+          createdAt: `2026-06-13T23:00:${String(index).padStart(2, "0")}.000Z`,
+        }),
+      ),
+    );
+    const concern = makeConcern({
+      sourceMessageIds: ["m2"],
+      reasonCode: "direct_mention",
+    });
+    const lane = makeLane();
+
+    const snapshot = await buildResponseSnapshot({
+      runtime,
+      concern,
+      lane,
+      settings,
+    });
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.visibleMessages.map((message) => message.id)).toEqual([
+      "m2",
+      "m3",
+      "m4",
+      "m5",
+      "m6",
+      "m7",
+      "m8",
+      "m9",
+      "m10",
+    ]);
+  });
 });

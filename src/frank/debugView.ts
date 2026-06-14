@@ -97,10 +97,9 @@ export function summarizeBurstPlan(plan: BurstPlan | null | undefined) {
   return {
     chunkCount: plan.chunks.length,
     reactionEmoji: plan.reactionEmoji ?? null,
-    chunks: plan.chunks.map((chunk, index) => {
-      const pause = chunk.pauseMs ? ` (${chunk.pauseMs}ms pause)` : "";
-      return `${index + 1}. ${truncate(chunk.text, 96)}${pause}`;
-    }),
+    chunks: plan.chunks.map(
+      (chunk, index) => `${index + 1}. ${truncate(chunk.text, 96)}`,
+    ),
   };
 }
 

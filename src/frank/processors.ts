@@ -124,7 +124,8 @@ Rules:
 - Use "opportunistic_question" if this looks like an open question or prompt Frank could naturally answer.
 - Use "opportunistic_active_room" only if the room is small/engaged enough that a natural interjection fits.
 - Use "insufficient_signal" if Frank should stay quiet.
-- The opportunism score should reflect how justified an ambient response is, not the user's configured setting.`,
+- The opportunism score should reflect how justified an ambient response is, not the user's configured setting.
+- If a previous message tells Frank to go away, do not respond.`,
       prompt: `Attention mode: ${settings.attentionMode}
 Configured opportunism level: ${settings.opportunismLevel}
 
@@ -228,10 +229,9 @@ Subject id rules:
 Keys should be stable kebab-case and concise.
 
 Profile realism rules:
-- Be conservative. Fewer memories is better than polluted memory.
+- Be conservative. Fewer memories is better than polluted memory, only include big, relevant items.
 - Usually emit 0-4 items for a batch, not the maximum.
 - Prefer one strong memory item over several weak variants of the same idea.
-- Treat sexual/flirty boundaries as preferences only if the transcript makes them feel intentional, repeated, or clearly important.
 - Avoid extracting implementation-testing behavior as a personality trait.`,
       prompt: `Guild id: ${guildId}
 Participants:
@@ -259,7 +259,11 @@ ${transcriptFromMessages(messages)}`,
     }));
     frankDebug("processor", "memory_extract.output", {
       itemCount: items.length,
-      subjects: [...new Set(items.map((item) => `${item.subjectType}:${item.subjectId}`))],
+      subjects: [
+        ...new Set(
+          items.map((item) => `${item.subjectType}:${item.subjectId}`),
+        ),
+      ],
       categories: [...new Set(items.map((item) => item.category))],
       items: items.slice(0, 5).map((item) => ({
         category: item.category,
@@ -338,7 +342,10 @@ ${evidence
     frankDebug("processor", "profile_synthesis.output", {
       summary: object.summary,
       bucketCounts: Object.fromEntries(
-        Object.entries(object.profile).map(([key, values]) => [key, values.length]),
+        Object.entries(object.profile).map(([key, values]) => [
+          key,
+          values.length,
+        ]),
       ),
     });
     return object;

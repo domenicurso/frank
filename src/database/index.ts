@@ -431,7 +431,10 @@ async function migrateGuildConfigSchema() {
   }
 
   const missingColumns = [
-    ["attentionMode", { type: DataTypes.STRING, defaultValue: "conversation-aware" }],
+    [
+      "attentionMode",
+      { type: DataTypes.STRING, defaultValue: "conversation-aware" },
+    ],
     ["opportunismLevel", { type: DataTypes.INTEGER, defaultValue: 15 }],
     ["reactionsEnabled", { type: DataTypes.BOOLEAN, defaultValue: true }],
     ["burstResponsesEnabled", { type: DataTypes.BOOLEAN, defaultValue: true }],
@@ -596,7 +599,7 @@ async function autoUnlockChannel(lockInfo: any) {
             },
           ],
         });
-      } catch (error) {
+      } catch {
         // Ignore errors sending notification
         console.error(
           chalk.yellow(

@@ -53,10 +53,7 @@ import {
   upsertLane,
   upsertLaneWork,
 } from "@/frank/queueStore";
-import {
-  applyDiscordEventToRuntime,
-  markBurstSent,
-} from "@/frank/runtime";
+import { applyDiscordEventToRuntime, markBurstSent } from "@/frank/runtime";
 import { buildResponseSnapshot, isBareSummonContent } from "@/frank/snapshot";
 import {
   appendFrankEvent,
@@ -68,29 +65,26 @@ import type {
   Concern,
   ConcernDecision,
   ConcernReasonCode,
-  ConcernStatus,
   ConversationLane,
   DiscordEvent,
-  FrankQueueName,
-  GenerateIntentJob,
   InvalidationReason,
   LaneFollowupJob,
   LaneGenerateJob,
-  LaneKey,
   LaneUpdateJob,
   MemoryExtractionJob,
   MemoryRefreshJob,
   QueueLease,
-  RuntimeUpdateJob,
-  SettleChannelJob,
   SystemEvent,
-  VisibleMessage,
 } from "@/frank/types";
 import { logError } from "@/log";
 import { randomUUID } from "node:crypto";
 
 type QueueWorker = {
-  queueName: "lane_update" | "lane_generate" | "lane_followup" | "memory_refresh";
+  queueName:
+    | "lane_update"
+    | "lane_generate"
+    | "lane_followup"
+    | "memory_refresh";
   lane: "live" | "generation" | "background";
   claimBatch: number;
   timeoutMs: number;
@@ -162,7 +156,9 @@ function appendUnique(items: string[], value: string) {
   return items.includes(value) ? items : [...items, value];
 }
 
-function toInterruptionReason(reasonCode: ConcernReasonCode): InvalidationReason {
+function toInterruptionReason(
+  reasonCode: ConcernReasonCode,
+): InvalidationReason {
   switch (reasonCode) {
     case "reply_to_bot":
       return "new_reply";
@@ -187,7 +183,39 @@ function shouldRetryConcern(reason: InvalidationReason | undefined) {
   ].includes(reason ?? "channel_shift");
 }
 
-function getSettleDelayMs(event: Extract<DiscordEvent, { type: "message_create" }>) {
+function shouldPreemptActiveConcern(options: {
+  lane: ConversationLane;
+  activeConcern: Concern;
+  event: Extract<DiscordEvent, { type: "message_create" }>;
+  reasonCode: ConcernReasonCode;
+  sentChunkCount: number;
+}) {
+  const directedAtBot =
+    options.reasonCode === "direct_mention" ||
+    options.reasonCode === "reply_to_bot";
+  const sameAuthor = options.activeConcern.focusAuthorId === options.event.authorId;
+
+  if (
+    (directedAtBot || sameAuthor) &&
+    (options.lane.status === "generating" || options.lane.status === "sending")
+  ) {
+    return true;
+  }
+
+  return (
+    sameAuthor &&
+    options.sentChunkCount === 0 &&
+    options.lane.status === "queued"
+  );
+}
+
+function shouldCarryPendingIntent(reason: InvalidationReason | undefined) {
+  return reason === "worker_timeout" || reason === "manual_abort";
+}
+
+function getSettleDelayMs(
+  event: Extract<DiscordEvent, { type: "message_create" }>,
+) {
   if (event.repliesToBot) {
     return 250;
   }
@@ -212,7 +240,7 @@ async function chooseExistingLane(
 async function decideConcern(
   event: Extract<DiscordEvent, { type: "message_create" }>,
   existingLane: ConversationLane | null,
-) : Promise<ConcernDecision> {
+): Promise<ConcernDecision> {
   const settleAt = new Date(Date.now() + getSettleDelayMs(event)).toISOString();
   const isBareSummon = isBareSummonContent(event.content);
 
@@ -322,6 +350,79 @@ async function queueMemoryRefreshForChannel(
   );
 }
 
+async function recoverOrphanedLaneExecution(
+  lane: ConversationLane,
+  concern: Concern | null,
+) {
+  if (
+    !concern ||
+    lane.activeConcernId !== concern.id ||
+    hasActiveExecution(lane.laneKey)
+  ) {
+    return false;
+  }
+
+  if (concern.status !== "generating" && lane.status !== "sending") {
+    return false;
+  }
+
+  const turn = lane.activeTurnId ? await getTurn(lane.activeTurnId) : null;
+  const sentChunkCount = turn?.sentChunkCount ?? 0;
+
+  frankDebug("worker", "lane.recover_orphaned_execution", {
+    laneKey: lane.laneKey,
+    laneStatus: lane.status,
+    concernId: concern.id,
+    concernStatus: concern.status,
+    turnId: lane.activeTurnId,
+    turnStatus: turn?.status ?? null,
+    sentChunkCount,
+  });
+
+  await cancelLaneWorkForConcern(concern.id);
+
+  if (turn && turn.status !== "sent" && turn.status !== "aborted") {
+    await updateTurn(turn.id, { status: "aborted" });
+  }
+
+  if (sentChunkCount > 0) {
+    await updateConcern(concern.id, { status: "failed" });
+    await upsertLane({
+      guildId: lane.guildId,
+      channelId: lane.channelId,
+      laneKey: lane.laneKey,
+      authorId: lane.authorId,
+      replyRootMessageId: lane.replyRootMessageId,
+      status: "idle",
+      activeConcernId: null,
+      activeTurnId: null,
+    });
+    await queueFollowup(lane);
+    return true;
+  }
+
+  const retriedConcern = await updateConcern(concern.id, {
+    status: "queued",
+    attemptCount: concern.attemptCount + 1,
+  });
+  const nextLane = await upsertLane({
+    guildId: lane.guildId,
+    channelId: lane.channelId,
+    laneKey: lane.laneKey,
+    authorId: lane.authorId,
+    replyRootMessageId: lane.replyRootMessageId,
+    status: "queued",
+    activeConcernId: concern.id,
+    activeTurnId: null,
+  });
+
+  if (retriedConcern) {
+    await enqueueLaneGenerate(retriedConcern, nextLane, new Date());
+  }
+
+  return true;
+}
+
 async function activateConcern(
   lane: ConversationLane,
   concern: Concern,
@@ -395,24 +496,36 @@ async function handleMessageCreateConcern(
     activeConcernId: existingLane?.activeConcernId ?? null,
     activeTurnId: existingLane?.activeTurnId ?? null,
   });
-  const concerns = await listOpenConcernsForLane(event.guildId, event.channelId, lane.laneKey);
+  const concerns = await listOpenConcernsForLane(
+    event.guildId,
+    event.channelId,
+    lane.laneKey,
+  );
   const activeConcern = lane.activeConcernId
-    ? concerns.find((concern) => concern.id === lane.activeConcernId) ??
-      (await getConcern(lane.activeConcernId))
+    ? (concerns.find((concern) => concern.id === lane.activeConcernId) ??
+      (await getConcern(lane.activeConcernId)))
     : null;
   const successorConcern =
     [...concerns]
       .reverse()
-      .find((concern) => concern.status === "queued" && concern.id !== lane.activeConcernId) ??
-    null;
+      .find(
+        (concern) =>
+          concern.status === "queued" && concern.id !== lane.activeConcernId,
+      ) ?? null;
   const executionState = getActiveExecutionState(lane.laneKey);
   const activeTurn =
-    lane.activeTurnId && !executionState ? await getTurn(lane.activeTurnId) : null;
+    lane.activeTurnId && !executionState
+      ? await getTurn(lane.activeTurnId)
+      : null;
   const sentChunkCount =
     executionState?.sentMessageCount ?? activeTurn?.sentChunkCount ?? 0;
   const availableAt = new Date(decision.settleAt ?? new Date().toISOString());
 
-  if (!activeConcern || lane.status === "idle" || activeConcern.status === "sent") {
+  if (
+    !activeConcern ||
+    lane.status === "idle" ||
+    activeConcern.status === "sent"
+  ) {
     const concern = await createQueuedConcernFromMessage({
       lane,
       event,
@@ -420,9 +533,13 @@ async function handleMessageCreateConcern(
     });
     await activateConcern(lane, concern, event.createdAt, availableAt);
   } else if (
-    activeConcern.focusAuthorId === event.authorId &&
-    sentChunkCount === 0 &&
-    (lane.status === "queued" || lane.status === "generating")
+    shouldPreemptActiveConcern({
+      lane,
+      activeConcern,
+      event,
+      reasonCode: decision.reasonCode,
+      sentChunkCount,
+    })
   ) {
     const successor =
       successorConcern && successorConcern.focusAuthorId === event.authorId
@@ -431,8 +548,14 @@ async function handleMessageCreateConcern(
             guildId: event.guildId,
             channelId: event.channelId,
             laneKey: lane.laneKey,
-            sourceEventIds: appendUnique(activeConcern.sourceEventIds, event.eventKey),
-            sourceMessageIds: appendUnique(activeConcern.sourceMessageIds, event.messageId),
+            sourceEventIds: appendUnique(
+              activeConcern.sourceEventIds,
+              event.eventKey,
+            ),
+            sourceMessageIds: appendUnique(
+              activeConcern.sourceMessageIds,
+              event.messageId,
+            ),
             focusAuthorId: event.authorId,
             anchorMessageId: activeConcern.anchorMessageId ?? event.messageId,
             status: "queued",
@@ -444,7 +567,10 @@ async function handleMessageCreateConcern(
       supersededByConcernId: successor?.id ?? null,
     });
     await cancelLaneWorkForConcern(activeConcern.id);
-    interruptLaneExecution(lane.laneKey, toInterruptionReason(decision.reasonCode));
+    interruptLaneExecution(
+      lane.laneKey,
+      toInterruptionReason(decision.reasonCode),
+    );
     await activateConcern(lane, successor!, event.createdAt, availableAt);
   } else {
     const queued =
@@ -493,13 +619,18 @@ async function handleConcernMutation(
 
     const remainingMessageIds =
       event.type === "message_delete"
-        ? concern.sourceMessageIds.filter((messageId) => messageId !== event.messageId)
+        ? concern.sourceMessageIds.filter(
+            (messageId) => messageId !== event.messageId,
+          )
         : [...concern.sourceMessageIds];
 
     if (remainingMessageIds.length === 0) {
       await updateConcern(concern.id, {
         status: "cancelled",
-        reasonCode: event.type === "message_delete" ? "message_deleted" : "message_edited",
+        reasonCode:
+          event.type === "message_delete"
+            ? "message_deleted"
+            : "message_edited",
       });
       await cancelLaneWorkForConcern(concern.id);
       interruptLaneExecution(
@@ -531,14 +662,18 @@ async function handleConcernMutation(
       sourceMessageIds: remainingMessageIds,
       focusAuthorId: concern.focusAuthorId,
       anchorMessageId:
-        concern.anchorMessageId === event.messageId ? remainingMessageIds[0] ?? null : concern.anchorMessageId,
+        concern.anchorMessageId === event.messageId
+          ? (remainingMessageIds[0] ?? null)
+          : concern.anchorMessageId,
       status: "queued",
-      reasonCode: event.type === "message_delete" ? "message_deleted" : "message_edited",
+      reasonCode:
+        event.type === "message_delete" ? "message_deleted" : "message_edited",
     });
     await updateConcern(concern.id, {
       status: "cancelled",
       supersededByConcernId: successor.id,
-      reasonCode: event.type === "message_delete" ? "message_deleted" : "message_edited",
+      reasonCode:
+        event.type === "message_delete" ? "message_deleted" : "message_edited",
     });
     await cancelLaneWorkForConcern(concern.id);
     interruptLaneExecution(
@@ -605,7 +740,7 @@ export async function stopFrankWorker() {
   }
 
   await abortAllActiveExecutions("worker_shutdown");
-  await Promise.allSettled([...inflightPromises.values()]);
+  await Promise.allSettled(inflightPromises.values());
   inflightControllers.clear();
   inflightPromises.clear();
 }
@@ -647,7 +782,9 @@ async function processFrankLaneOnce(lane: WorkerLane) {
           });
         } catch (error) {
           const normalized =
-            error instanceof Error ? error.stack || error.message : String(error);
+            error instanceof Error
+              ? error.stack || error.message
+              : String(error);
           logError("worker", `Queue item ${lease.id} failed`, error, {
             queueName: worker.queueName,
             leaseId: lease.id,
@@ -675,7 +812,9 @@ async function runQueueLease(worker: QueueWorker, lease: QueueLease) {
   inflightControllers.set(lease.id, localController);
 
   const signal = AbortSignal.any(
-    [timeoutSignal, localController.signal, shutdownController?.signal].filter(Boolean) as AbortSignal[],
+    [timeoutSignal, localController.signal, shutdownController?.signal].filter(
+      Boolean,
+    ) as AbortSignal[],
   );
 
   const task = (async () => {
@@ -684,13 +823,25 @@ async function runQueueLease(worker: QueueWorker, lease: QueueLease) {
         await handleLaneUpdate(lease, lease.payload as LaneUpdateJob, signal);
         return;
       case "lane_followup":
-        await handleLaneFollowup(lease, lease.payload as LaneFollowupJob, signal);
+        await handleLaneFollowup(
+          lease,
+          lease.payload as LaneFollowupJob,
+          signal,
+        );
         return;
       case "lane_generate":
-        await handleLaneGenerate(lease, lease.payload as LaneGenerateJob, signal);
+        await handleLaneGenerate(
+          lease,
+          lease.payload as LaneGenerateJob,
+          signal,
+        );
         return;
       case "memory_refresh":
-        await handleMemoryRefresh(lease, lease.payload as MemoryRefreshJob, signal);
+        await handleMemoryRefresh(
+          lease,
+          lease.payload as MemoryRefreshJob,
+          signal,
+        );
         return;
     }
   })();
@@ -716,7 +867,10 @@ async function handleLaneUpdate(
   }
 
   const runtime = await getChannelRuntime(event.guildId, event.channelId);
-  const nextRuntime = applyDiscordEventToRuntime(runtime, event as DiscordEvent);
+  const nextRuntime = applyDiscordEventToRuntime(
+    runtime,
+    event as DiscordEvent,
+  );
   await saveChannelRuntime(nextRuntime);
 
   const control = await getChannelControl(event.guildId, event.channelId);
@@ -725,15 +879,22 @@ async function handleLaneUpdate(
     channelRevision: control.channelRevision + 1,
     lastSeenEventId: payload.eventId,
     lastHumanMessageId:
-      event.type === "message_create" ? event.messageId : control.lastHumanMessageId,
+      event.type === "message_create"
+        ? event.messageId
+        : control.lastHumanMessageId,
     lastHumanMessageAt:
-      event.type === "message_create" ? event.createdAt : control.lastHumanMessageAt,
+      event.type === "message_create"
+        ? event.createdAt
+        : control.lastHumanMessageAt,
   };
   await saveChannelControl(nextControl);
 
   if (event.type === "message_create") {
     await handleMessageCreateConcern(event, nextControl);
-  } else if (event.type === "message_update" || event.type === "message_delete") {
+  } else if (
+    event.type === "message_update" ||
+    event.type === "message_delete"
+  ) {
     await handleConcernMutation(event);
   }
 
@@ -749,8 +910,20 @@ async function handleLaneFollowup(
   payload: LaneFollowupJob,
   _signal: AbortSignal,
 ) {
-  const lane = await getLane(payload.guildId, payload.channelId, payload.laneKey);
-  if (!lane || lane.status !== "idle") {
+  const lane = await getLane(
+    payload.guildId,
+    payload.channelId,
+    payload.laneKey,
+  );
+  if (!lane) {
+    return;
+  }
+
+  if (lane.status !== "idle") {
+    const activeConcern = lane.activeConcernId
+      ? await getConcern(lane.activeConcernId)
+      : null;
+    await recoverOrphanedLaneExecution(lane, activeConcern);
     return;
   }
 
@@ -787,7 +960,11 @@ async function handleLaneGenerate(
   payload: LaneGenerateJob,
   signal: AbortSignal,
 ) {
-  const lane = await getLane(payload.guildId, payload.channelId, payload.laneKey);
+  const lane = await getLane(
+    payload.guildId,
+    payload.channelId,
+    payload.laneKey,
+  );
   const concern = await getConcern(payload.concernId);
   if (
     !lane ||
@@ -795,6 +972,9 @@ async function handleLaneGenerate(
     concern.status !== "queued" ||
     lane.activeConcernId !== concern.id
   ) {
+    if (lane && concern) {
+      await recoverOrphanedLaneExecution(lane, concern);
+    }
     frankDebug("worker", "lane_generate.stale_on_start", {
       lane,
       concern,
@@ -887,7 +1067,11 @@ async function handleLaneGenerate(
     reactionsEnabled: settings.reactionsEnabled,
     abortSignal: signal,
     beforeSendChunk: async ({ isFirst }) => {
-      const freshLane = await getLane(payload.guildId, payload.channelId, payload.laneKey);
+      const freshLane = await getLane(
+        payload.guildId,
+        payload.channelId,
+        payload.laneKey,
+      );
       if (
         !freshLane ||
         freshLane.activeConcernId !== concern.id ||
@@ -916,7 +1100,11 @@ async function handleLaneGenerate(
       return {
         plan: null,
         sentMessageIds: [] as string[],
-        sentMessages: [] as Array<{ id: string; text: string; createdAt: string }>,
+        sentMessages: [] as Array<{
+          id: string;
+          text: string;
+          createdAt: string;
+        }>,
         aborted: true,
         reason: normalizeExecutionAbortReason(signal.reason ?? error),
       };
@@ -951,12 +1139,14 @@ async function handleLaneGenerate(
       .slice(result.sentMessageIds.length)
       .map((chunk) => chunk.text);
     const interruptedAt = new Date().toISOString();
+    const carryPendingIntent =
+      remainingChunks.length > 0 && shouldCarryPendingIntent(result.reason);
     await updateTurn(turn.id, {
       status: "aborted",
       plannedChunks: result.plan?.chunks ?? [],
       sentChunkCount: result.sentMessageIds.length,
       pendingIntentContext:
-        remainingChunks.length > 0
+        carryPendingIntent
           ? {
               snapshotId: snapshot.id,
               anchorMessageId: snapshot.anchorMessageId,
@@ -968,7 +1158,11 @@ async function handleLaneGenerate(
           : null,
     });
 
-    const freshLane = await getLane(payload.guildId, payload.channelId, payload.laneKey);
+    const freshLane = await getLane(
+      payload.guildId,
+      payload.channelId,
+      payload.laneKey,
+    );
     const freshConcern = await getConcern(concern.id);
     if (freshLane?.activeTurnId === turn.id) {
       await upsertLane({
@@ -982,7 +1176,9 @@ async function handleLaneGenerate(
             ? "queued"
             : "idle",
         activeConcernId:
-          freshLane.activeConcernId === concern.id ? null : freshLane.activeConcernId,
+          freshLane.activeConcernId === concern.id
+            ? null
+            : freshLane.activeConcernId,
         activeTurnId: null,
       });
     }
@@ -1035,7 +1231,10 @@ async function handleLaneGenerate(
   }
 
   const sentAt = new Date().toISOString();
-  const freshRuntime = await getChannelRuntime(payload.guildId, payload.channelId);
+  const freshRuntime = await getChannelRuntime(
+    payload.guildId,
+    payload.channelId,
+  );
   const nextRuntime = markBurstSent(
     freshRuntime,
     result.sentMessages,
@@ -1052,7 +1251,8 @@ async function handleLaneGenerate(
     concernId: concern.id,
     turnId: turn.id,
     sentAt,
-    lastBotMessageId: result.sentMessageIds[result.sentMessageIds.length - 1] ?? null,
+    lastBotMessageId:
+      result.sentMessageIds[result.sentMessageIds.length - 1] ?? null,
     plannedChunks: result.plan?.chunks ?? [],
     sentChunkCount: result.sentMessageIds.length,
   });
@@ -1065,8 +1265,13 @@ async function handleMemoryRefresh(
   signal: AbortSignal,
 ) {
   frankDebug("worker", "memory_refresh.input", payload);
-  await extractMemoryFromChannel(payload.guildId, payload.channelId, payload.sourceEventId, {
-    abortSignal: signal,
-  });
+  await extractMemoryFromChannel(
+    payload.guildId,
+    payload.channelId,
+    payload.sourceEventId,
+    {
+      abortSignal: signal,
+    },
+  );
   frankDebug("worker", "memory_refresh.output", payload);
 }

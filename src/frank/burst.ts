@@ -13,16 +13,11 @@ export function validateBurstPlan(
   const chunks = plan.chunks
     .map((chunk) => ({
       text: chunk.text.trim(),
-      pauseMs: chunk.pauseMs,
     }))
     .filter((chunk) => chunk.text.length > 0)
     .slice(0, maxMessages)
     .map((chunk) => ({
       text: chunk.text.slice(0, 1_900),
-      pauseMs:
-        typeof chunk.pauseMs === "number"
-          ? Math.max(0, Math.min(4_000, Math.round(chunk.pauseMs)))
-          : undefined,
     }));
 
   if (chunks.length === 0) {

@@ -380,13 +380,6 @@ export async function executeStreamedBurstPlan(options: {
       latestPlan.reactionEmoji = null;
     }
 
-    flushReadyChunks(true);
-
-    await sendChain;
-    fullyDelivered =
-      latestPlan.chunks.length > 0 &&
-      sentMessageIds.length >= latestPlan.chunks.length;
-
     if (!signal.aborted && latestPlan.reactionEmoji && options.snapshot.anchorMessageId) {
       try {
         const anchor = await textChannel.messages.fetch(options.snapshot.anchorMessageId);
@@ -395,6 +388,13 @@ export async function executeStreamedBurstPlan(options: {
         console.error("[Frank] Failed to react:", error);
       }
     }
+
+    flushReadyChunks(true);
+
+    await sendChain;
+    fullyDelivered =
+      latestPlan.chunks.length > 0 &&
+      sentMessageIds.length >= latestPlan.chunks.length;
 
     if (!signal.aborted) {
       const event: SystemEvent = {
@@ -531,17 +531,13 @@ function coercePartialBurstPlan(partial: unknown, maxBurstMessages: number): Bur
   }
 
   const source = partial as {
-    chunks?: Array<{ text?: string; pauseMs?: number }>;
+    chunks?: Array<{ text?: string }>;
     reactionEmoji?: string | null;
   };
 
   const chunks = (source.chunks ?? [])
     .map((chunk) => ({
       text: (chunk?.text ?? "").trim().slice(0, 1_900),
-      pauseMs:
-        typeof chunk?.pauseMs === "number"
-          ? Math.max(0, Math.min(4_000, Math.round(chunk.pauseMs)))
-          : undefined,
     }))
     .filter((chunk) => chunk.text.length > 0)
     .slice(0, maxBurstMessages);
@@ -553,7 +549,7 @@ function coercePartialBurstPlan(partial: unknown, maxBurstMessages: number): Bur
 }
 
 async function sendChunkWhenTypingBudgetMet(options: {
-  chunk: { text: string; pauseMs?: number };
+  chunk: { text: string };
   startedAt: number;
   isFirst: boolean;
   laneKey: string;
@@ -563,7 +559,7 @@ async function sendChunkWhenTypingBudgetMet(options: {
   sentMessages: Array<{ id: string; text: string; createdAt: string }>;
   signal: AbortSignal;
   beforeSendChunk?: (options: {
-    chunk: { text: string; pauseMs?: number };
+    chunk: { text: string };
     isFirst: boolean;
     sentMessageCount: number;
   }) => Promise<void>;
@@ -628,8 +624,4 @@ async function sendChunkWhenTypingBudgetMet(options: {
     text: options.chunk.text,
     createdAt: sent.createdAt.toISOString(),
   });
-
-  if (options.chunk.pauseMs) {
-    await wait(options.chunk.pauseMs, options.signal);
-  }
 }

@@ -10,6 +10,7 @@ import {
 } from "discord.js";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 export const name = "Reload";
 
@@ -30,7 +31,7 @@ export async function execute(
   const name = interaction.options.getString("command", true).toLowerCase();
   const commands = interaction.client.commands as Collection<
     string,
-    { data: any; execute: Function }
+    { definition: SlashCommandBuilder; execute: Function }
   >;
 
   if (!commands.has(name)) {
@@ -64,22 +65,20 @@ export async function execute(
   }
 
   try {
-    // clear cache & reload
-    delete require.cache[require.resolve(modulePath)];
-    // re-import with require (CommonJS)
-    // @ts-ignore
-    const newCommand = require(modulePath);
-    if (!newCommand.data || !newCommand.execute) {
-      throw new Error("Missing data or execute export");
+    const moduleUrl = pathToFileURL(modulePath);
+    moduleUrl.searchParams.set("t", String(Date.now()));
+    const newCommand = await import(moduleUrl.href);
+    if (!newCommand.definition || !newCommand.execute) {
+      throw new Error("Missing definition or execute export");
     }
-    commands.set(newCommand.data.name, newCommand);
+    commands.set(newCommand.definition.name, newCommand);
 
     return interaction.reply({
       embeds: [
         createEmbed(
           GREEN,
           "Command Reloaded",
-          `Reloaded **${newCommand.data.name}**!`,
+          `Reloaded **${newCommand.definition.name}**!`,
         ),
       ],
       flags: MessageFlags.Ephemeral,
