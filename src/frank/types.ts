@@ -16,10 +16,22 @@ export type DiscordEvent =
       messageId: string;
       authorId: string;
       authorName: string;
+      authorUsername: string;
       content: string;
       mentionsBot: boolean;
       mentionsUserIds: string[];
+      mentionedUsers: Array<{
+        id: string;
+        username: string;
+        displayName: string;
+      }>;
+      mentionedChannels: Array<{ id: string; name: string }>;
       replyToMessageId: string | null;
+      replyPreview: {
+        authorName: string;
+        authorUsername: string;
+        content: string;
+      } | null;
       createdAt: string;
       attachments: Array<{ name: string; url: string; contentType: string }>;
     }
@@ -104,9 +116,22 @@ export type VisibleMessage = {
   id: string;
   authorId: string;
   authorName: string;
+  authorUsername: string;
   content: string;
   mentionsBot: boolean;
+  mentionedUsers?: Array<{
+    id: string;
+    username: string;
+    displayName: string;
+  }>;
+  mentionedChannels?: Array<{ id: string; name: string }>;
   replyToMessageId: string | null;
+  replyPreview?: {
+    authorName: string;
+    authorUsername: string;
+    content: string;
+  } | null;
+  attachments?: Array<{ name: string; contentType: string; url: string }>;
   createdAt: string;
   fromBot: boolean;
 };
@@ -251,7 +276,8 @@ export type InvalidationReason =
   | "new_direct_message"
   | "new_reply"
   | "channel_shift"
-  | "manual_abort";
+  | "manual_abort"
+  | "worker_timeout";
 
 export type RuntimeUpdateJob = {
   eventId: string;

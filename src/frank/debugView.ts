@@ -1,3 +1,4 @@
+import { renderVisibleMessage } from "@/frank/messageContext";
 import type {
   BurstPlan,
   ChannelRuntimeProjection,
@@ -11,19 +12,18 @@ function truncate(value: string, max = 72) {
   return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
-function speakerLabel(message: VisibleMessage) {
-  return message.fromBot ? "Frank" : message.authorName;
-}
-
 export function summarizeMessages(messages: VisibleMessage[], limit = 6) {
-  return messages.slice(-limit).map((message) => {
+  const visible = messages.slice(-limit);
+  return visible.map((message) => {
     const flags = [
       message.mentionsBot ? "@frank" : null,
       message.replyToMessageId ? "reply" : null,
       message.fromBot ? "bot" : null,
     ].filter(Boolean);
 
-    return `${speakerLabel(message)}${flags.length ? ` [${flags.join(", ")}]` : ""}: ${truncate(message.content || "<empty>")}`;
+    const rendered = renderVisibleMessage(message, messages);
+    const singleLine = rendered.replace(/\s*\n\s*/g, " / ");
+    return `${truncate(singleLine)}${flags.length ? ` [${flags.join(", ")}]` : ""}`;
   });
 }
 

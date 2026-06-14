@@ -64,10 +64,10 @@ export const definition = new SlashCommandBuilder()
       .addIntegerOption((option) =>
         option
           .setName("count")
-          .setDescription("1-5")
+          .setDescription("1-500")
           .setRequired(true)
           .setMinValue(1)
-          .setMaxValue(5),
+          .setMaxValue(500),
       ),
   );
 

@@ -1,4 +1,5 @@
 import { sequelize } from "@/database";
+import { FRANK_DUE_JOB_SCAN_LIMIT } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import { parseJson, stringifyJson } from "@/frank/json";
 import type {
@@ -332,18 +333,37 @@ export async function enqueueFrankJob(
   } = {},
 ) {
   const runAt = options.runAt ?? new Date();
-  const existing =
+  const pendingMatches =
     options.queueKey
       ? await withSqliteRetry(() =>
-          FrankJobRecord.findOne({
+          FrankJobRecord.findAll({
             where: {
               queueKey: options.queueKey,
               jobType,
               status: "pending",
             },
+            order: [["runAt", "DESC"], ["id", "DESC"]],
           }),
         )
-      : null;
+      : [];
+  const [existing, ...stalePending] = pendingMatches;
+
+  if (stalePending.length > 0) {
+    await withSqliteRetry(() =>
+      FrankJobRecord.destroy({
+        where: {
+          id: {
+            [Op.in]: stalePending.map((job) => job.id),
+          },
+        },
+      }),
+    );
+    frankDebug("store", "enqueue_job.pruned_duplicates", {
+      jobType,
+      queueKey: options.queueKey ?? null,
+      prunedJobIds: stalePending.map((job) => job.id),
+    });
+  }
 
   if (existing) {
     existing.payload = stringifyJson(payload);
@@ -384,18 +404,44 @@ export async function enqueueFrankJob(
 }
 
 export async function claimFrankJobs(limit: number): Promise<FrankJobRecord[]> {
+  return claimFrankJobsByType(limit, null);
+}
+
+export async function claimFrankJobsByType(
+  limit: number,
+  jobTypes: FrankJobType[] | null,
+): Promise<FrankJobRecord[]> {
+  const jobPriority: Record<FrankJobType, number> = {
+    runtime_update: 0,
+    response_decision: 1,
+    character_generation: 2,
+    memory_extraction: 3,
+  };
+
   const dueJobs = await FrankJobRecord.findAll({
     where: {
       status: "pending",
       runAt: { [Op.lte]: new Date() },
+      ...(jobTypes && jobTypes.length > 0
+        ? { jobType: { [Op.in]: jobTypes } }
+        : {}),
     },
     order: [["runAt", "ASC"]],
-    limit,
+    limit: Math.max(limit, FRANK_DUE_JOB_SCAN_LIMIT),
+  });
+
+  dueJobs.sort((left, right) => {
+    const priorityDelta =
+      jobPriority[left.jobType] - jobPriority[right.jobType];
+    if (priorityDelta !== 0) return priorityDelta;
+    return left.runAt.getTime() - right.runAt.getTime();
   });
 
   const claimed: FrankJobRecord[] = [];
 
   for (const job of dueJobs) {
+    if (claimed.length >= limit) break;
+
     const [affected] = await FrankJobRecord.update(
       {
         status: "running",
@@ -431,6 +477,42 @@ export async function claimFrankJobs(limit: number): Promise<FrankJobRecord[]> {
   }
 
   return claimed;
+}
+
+export async function releaseStaleFrankJobs(
+  jobTypes: FrankJobType[],
+  staleMs: number,
+) {
+  const cutoff = new Date(Date.now() - staleMs);
+  const [released] = await FrankJobRecord.update(
+    {
+      status: "pending",
+      lockedAt: null,
+      lastError: "Released stale running job lock",
+      runAt: new Date(),
+    },
+    {
+      where: {
+        status: "running",
+        lockedAt: {
+          [Op.lte]: cutoff,
+        },
+        jobType: {
+          [Op.in]: jobTypes,
+        },
+      },
+    },
+  );
+
+  if (released > 0) {
+    frankDebug("store", "release_stale_jobs", {
+      jobTypes,
+      released,
+      staleMs,
+    });
+  }
+
+  return released;
 }
 
 export function getFrankJobPayload<T extends FrankJobPayload>(job: FrankJobRecord): T {

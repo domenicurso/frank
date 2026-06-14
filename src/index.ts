@@ -296,7 +296,9 @@ process.on("uncaughtException", (error) => {
 
 process.on("unhandledRejection", (reason, promise) => {
   logError("process", "Unhandled rejection", reason, { promise });
-  gracefulShutdown("unhandledRejection");
+  if (process.env.FRANK_STRICT_REJECTIONS?.trim().toLowerCase() === "true") {
+    gracefulShutdown("unhandledRejection");
+  }
 });
 
 client.login(process.env.DISCORD_TOKEN!);

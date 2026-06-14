@@ -2,8 +2,14 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { generateObject } from "ai";
 import z from "zod";
 
+import {
+  FRANK_ATTENTION_TIMEOUT_MS,
+  FRANK_MEMORY_EXTRACTION_TIMEOUT_MS,
+  FRANK_MEMORY_PROFILE_TIMEOUT_MS,
+} from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import { summarizeEvidence, summarizeMessages } from "@/frank/debugView";
+import { renderVisibleMessage } from "@/frank/messageContext";
 import { FRANK_PROCESSOR_MODEL } from "@/frank/models";
 import { logError } from "@/log";
 import type {
@@ -75,10 +81,10 @@ function hasModelAccess() {
 
 function transcriptFromMessages(messages: VisibleMessage[]) {
   return messages
-    .map(
-      (message) =>
-        `${message.authorName} (${message.authorId}): ${message.content}`,
-    )
+    .map((message) => {
+      const rendered = renderVisibleMessage(message, messages);
+      return `${rendered} (${message.authorId})`;
+    })
     .join("\n");
 }
 
@@ -86,6 +92,9 @@ export async function classifyAttentionWithModel(
   runtime: ChannelRuntimeProjection,
   latestMessage: VisibleMessage,
   settings: FrankGuildSettings,
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
 ): Promise<AttentionDecision | null> {
   if (!hasModelAccess()) return null;
 
@@ -102,6 +111,8 @@ export async function classifyAttentionWithModel(
       model: openrouter(FRANK_PROCESSOR_MODEL, {}),
       schema: attentionSchema,
       temperature: 0.1,
+      abortSignal:
+        options.abortSignal ?? AbortSignal.timeout(FRANK_ATTENTION_TIMEOUT_MS),
       system: `You are a narrow Discord attention classifier for Frank.
 
 Decide only whether Frank should join this exact chat moment.
@@ -146,6 +157,9 @@ export async function extractMemoryWithModel(
   guildId: string,
   messages: VisibleMessage[],
   sourceEventId: string | null,
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
 ): Promise<Array<
   Omit<MemoryEvidence, "id"> & {
     displayName: string;
@@ -158,7 +172,8 @@ export async function extractMemoryWithModel(
     guildId,
     sourceEventId,
     messageCount: messages.length,
-    messages: summarizeMessages(messages, 6),
+    participants: [...new Set(messages.map((message) => message.authorName))],
+    messages: summarizeMessages(messages, 4),
   });
 
   try {
@@ -173,9 +188,13 @@ export async function extractMemoryWithModel(
       model: openrouter(FRANK_PROCESSOR_MODEL),
       schema: memoryExtractionSchema,
       temperature: 0.1,
+      abortSignal:
+        options.abortSignal ??
+        AbortSignal.timeout(FRANK_MEMORY_EXTRACTION_TIMEOUT_MS),
       system: `Extract durable memory from a Discord chat batch.
 
 Return only information worth remembering later.
+If nothing in this batch is worth long-term memory, return zero items.
 
 Good memory:
 - durable preferences
@@ -193,13 +212,27 @@ Bad memory:
 - routine use of Frank's name or obvious direct-addressing with no new information
 - generic "help me", "lol", "bruh", or boilerplate banter unless it reveals a durable goal or project
 - isolated weird exchanges that should not become the person's main remembered trait
+- test prompts, ping checks, mention checks, reply checks, or "can you see this image" style validation chatter
+- one-off moderation corrections unless they represent a repeated durable boundary
+- repeated restatements of the same project or goal in slightly different words
+- dev changelog details, diff summaries, cleanup notes, or implementation logs unless they reflect a genuinely new durable project state
+- generic "talks to Frank", "knows Frank", or "uses Frank's name" relationship items unless there is a real social fact underneath
+- image visibility checks, channel formatting checks, or message deletion cleanup requests
 
 Subject id rules:
 - For user subjects, use the exact Discord user id shown in the transcript.
 - For server subjects, use the guild id: ${guildId}
 - For project or relationship subjects, use concise stable ids like "frank-runtime" or "user123:partner".
+- For user display names, use the participant name exactly as shown in the transcript.
 
-Keys should be stable kebab-case and concise.`,
+Keys should be stable kebab-case and concise.
+
+Profile realism rules:
+- Be conservative. Fewer memories is better than polluted memory.
+- Usually emit 0-4 items for a batch, not the maximum.
+- Prefer one strong memory item over several weak variants of the same idea.
+- Treat sexual/flirty boundaries as preferences only if the transcript makes them feel intentional, repeated, or clearly important.
+- Avoid extracting implementation-testing behavior as a personality trait.`,
       prompt: `Guild id: ${guildId}
 Participants:
 ${participants.join("\n")}
@@ -224,15 +257,19 @@ ${transcriptFromMessages(messages)}`,
         messages[messages.length - 1]?.createdAt ?? new Date().toISOString(),
       displayName: item.displayName,
     }));
-    frankDebug("processor", "memory_extract.output", items.map((item) => ({
-      subjectType: item.subjectType,
-      subjectId: item.subjectId,
-      category: item.category,
-      key: item.key,
-      salience: Number(item.salience.toFixed(2)),
-      confidence: Number(item.confidence.toFixed(2)),
-      content: item.content,
-    })));
+    frankDebug("processor", "memory_extract.output", {
+      itemCount: items.length,
+      subjects: [...new Set(items.map((item) => `${item.subjectType}:${item.subjectId}`))],
+      categories: [...new Set(items.map((item) => item.category))],
+      items: items.slice(0, 5).map((item) => ({
+        category: item.category,
+        subjectId: item.subjectId,
+        key: item.key,
+        salience: Number(item.salience.toFixed(2)),
+        confidence: Number(item.confidence.toFixed(2)),
+        content: item.content,
+      })),
+    });
     return items;
   } catch (error) {
     logError("processor", "Memory extractor failed", error, {
@@ -248,13 +285,17 @@ ${transcriptFromMessages(messages)}`,
 export async function synthesizeProfileWithModel(
   displayName: string,
   evidence: MemoryEvidence[],
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
 ): Promise<Pick<MemoryProfile, "summary" | "profile"> | null> {
   if (!hasModelAccess() || evidence.length === 0) return null;
 
   frankDebug("processor", "profile_synthesis.input", {
     model: FRANK_PROCESSOR_MODEL,
     displayName,
-    evidence: summarizeEvidence(evidence),
+    evidenceCount: evidence.length,
+    evidence: summarizeEvidence(evidence, 4),
   });
 
   try {
@@ -262,6 +303,9 @@ export async function synthesizeProfileWithModel(
       model: openrouter(FRANK_PROCESSOR_MODEL),
       schema: memoryProfileSchema,
       temperature: 0.2,
+      abortSignal:
+        options.abortSignal ??
+        AbortSignal.timeout(FRANK_MEMORY_PROFILE_TIMEOUT_MS),
       system: `You are synthesizing a human-like memory profile for a Discord character bot.
 
 Goal:
@@ -271,6 +315,14 @@ Goal:
 - prefer ongoing goals, projects, and stable preferences over one-off recent arcs
 - only include recent-arc material if it still matters for continuity or is unusually salient
 - keep each bullet concrete and natural
+- do not repeat the same theme across projects, goals, and recent_arc
+- if two evidence items say nearly the same thing, merge them into one cleaner memory
+- use preferences for durable tastes or boundaries, not every isolated correction or annoyance
+- keep the summary and buckets feeling like a person's mental model, not a changelog
+- avoid relationship bullets that only say the user talks to Frank or knows Frank
+- avoid recent_arc bullets that just summarize code diffs, cleanup, or debugging unless that state truly matters later
+- prefer leaving a bucket empty over filling it with weak or noisy trivia
+- summarize the person, not the transcript
 - do not invent facts beyond the evidence`,
       prompt: `Subject: ${displayName}
 
@@ -283,7 +335,12 @@ ${evidence
   .join("\n")}`,
     });
 
-    frankDebug("processor", "profile_synthesis.output", object);
+    frankDebug("processor", "profile_synthesis.output", {
+      summary: object.summary,
+      bucketCounts: Object.fromEntries(
+        Object.entries(object.profile).map(([key, values]) => [key, values.length]),
+      ),
+    });
     return object;
   } catch (error) {
     logError("processor", "Profile synthesis failed", error, {

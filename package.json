@@ -9,7 +9,7 @@
     "migrate": "bun run src/migrate.ts",
     "migrate:railway": "bun run src/migrate-railway.ts",
     "test:memory": "bun run src/test-memory-summarizer.ts",
-    "dev": "bun --hot src/index.ts"
+    "dev": "bun --watch src/index.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -16,7 +16,6 @@ import {
 import type {
   DiscordEvent,
   MemoryEvidence,
-  MemoryCategory,
   MemoryProfile,
   MemorySubjectType,
   PersistedEvent,
@@ -33,68 +32,8 @@ function uniqueMessagesById(events: Array<Extract<DiscordEvent, { type: "message
   return [...byId.values()];
 }
 
-function relevanceWords(input: string) {
-  return input
-    .toLowerCase()
-    .split(/[^a-z0-9]+/g)
-    .filter((word) => word.length >= 3);
-}
-
-function scoreMemoryFact(
-  category: MemoryCategory,
-  content: string,
-  recentWords: Set<string>,
-) {
-  const baseWeights: Record<MemoryCategory, number> = {
-    goals: 1.45,
-    projects: 1.35,
-    preferences: 1.1,
-    relationships: 0.9,
-    habits: 0.8,
-    identity: 0.6,
-    recent_arc: 0.35,
-  };
-
-  const contentWords = relevanceWords(content);
-  const overlap = contentWords.filter((word) => recentWords.has(word)).length;
-  const overlapBoost = overlap > 0 ? 1.25 + overlap * 0.2 : 0;
-  const helpBoost =
-    (recentWords.has("help") ||
-      recentWords.has("finals") ||
-      recentWords.has("study") ||
-      recentWords.has("class") ||
-      recentWords.has("week")) &&
-    (category === "goals" || category === "projects")
-      ? 0.9
-      : 0;
-
-  return baseWeights[category] + overlapBoost + helpBoost;
-}
-
-function buildRetrievalSummary(
-  profile: MemoryProfile,
-  recentWords: Set<string>,
-) {
-  const facts = Object.entries(profile.profile)
-    .flatMap(([category, values]) =>
-      values.map((value) => ({
-        category: category as MemoryCategory,
-        value,
-        score: scoreMemoryFact(category as MemoryCategory, value, recentWords),
-      })),
-    )
-    .sort((left, right) => right.score - left.score);
-
-  const topFacts = facts
-    .filter((fact, index, array) => array.findIndex((entry) => entry.value === fact.value) === index)
-    .slice(0, 2)
-    .map((fact) => fact.value);
-
-  if (topFacts.length === 0) {
-    return profile.summary;
-  }
-
-  return topFacts.join(" ");
+export function buildRetrievalSummary(profile: MemoryProfile) {
+  return profile.summary;
 }
 
 function decayedEvidenceScore(item: MemoryEvidence) {
@@ -116,6 +55,9 @@ export async function extractMemoryFromChannel(
   guildId: string,
   channelId: string,
   sourceEventId: string,
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
 ) {
   const recentEvents = await listFrankEventsForChannel(
     channelId,
@@ -135,9 +77,18 @@ export async function extractMemoryFromChannel(
       id: event.messageId,
       authorId: event.authorId,
       authorName: event.authorName,
+      authorUsername: event.authorUsername,
       content: event.content,
       mentionsBot: event.mentionsBot,
+      mentionedUsers: event.mentionedUsers,
+      mentionedChannels: event.mentionedChannels,
       replyToMessageId: event.replyToMessageId,
+      replyPreview: event.replyPreview,
+      attachments: event.attachments.map((attachment) => ({
+        name: attachment.name,
+        contentType: attachment.contentType,
+        url: attachment.url,
+      })),
       createdAt: event.createdAt,
       fromBot: false,
     }));
@@ -148,13 +99,16 @@ export async function extractMemoryFromChannel(
     sourceEventId,
     recentEventCount: recentEvents.length,
     messageCount: messages.length,
-    messages: summarizeMessages(messages, 6),
+    messages: summarizeMessages(messages, 4),
   });
 
   const modelEvidence = await extractMemoryWithModel(
     guildId,
     messages,
     sourceEventId,
+    {
+      abortSignal: options.abortSignal,
+    },
   );
 
   if (!modelEvidence || modelEvidence.length === 0) {
@@ -171,17 +125,30 @@ export async function extractMemoryFromChannel(
     await upsertMemoryEvidence(evidence);
   }
 
+  const preferredDisplayNames = new Map(
+    modelEvidence.map((item) => [
+      `${item.subjectType}:${item.subjectId}`,
+      item.displayName,
+    ]),
+  );
   const subjects = modelEvidence
     ? [...new Set(modelEvidence.map((item) => `${item.subjectType}:${item.subjectId}`))]
     : [...new Set(messages.map((message) => `user:${message.authorId}`))];
 
   for (const subject of subjects) {
+    if (options.abortSignal?.aborted) {
+      throw new Error(String(options.abortSignal.reason || "aborted"));
+    }
     const [subjectType, subjectId] = subject.split(":", 2);
     if (!subjectType || !subjectId) continue;
     await refreshSubjectProfile(
       guildId,
       subjectType as MemorySubjectType,
       subjectId,
+      preferredDisplayNames.get(subject),
+      {
+        abortSignal: options.abortSignal,
+      },
     );
   }
 
@@ -190,6 +157,7 @@ export async function extractMemoryFromChannel(
     channelId,
     sourceEventId,
     evidenceCount: modelEvidence.length,
+    subjectCount: subjects.length,
     subjects,
   });
 }
@@ -198,6 +166,10 @@ export async function refreshSubjectProfile(
   guildId: string,
   subjectType: MemorySubjectType,
   subjectId: string,
+  preferredDisplayName?: string,
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
 ) {
   frankDebug("memory", "refresh_profile.input", {
     guildId,
@@ -209,10 +181,11 @@ export async function refreshSubjectProfile(
   const active = evidenceRecords.filter((record) => !record.suppressed);
   if (active.length === 0) return null;
 
+  const existingProfile = await getMemoryProfile(guildId, subjectType, subjectId);
   const displayName =
-    subjectType === "user"
-      ? active[0]?.content.split(" ")[0] ?? subjectId
-      : active[0]?.subjectId ?? subjectId;
+    preferredDisplayName ||
+    existingProfile?.displayName ||
+    subjectId;
 
   const fallbackProfile = buildProfileFromEvidence(
     guildId,
@@ -239,6 +212,9 @@ export async function refreshSubjectProfile(
   const synthesized = await synthesizeProfileWithModel(
     displayName,
     fallbackProfile.topEvidence,
+    {
+      abortSignal: options.abortSignal,
+    },
   );
 
   const profile = synthesized
@@ -256,8 +232,10 @@ export async function refreshSubjectProfile(
     subjectId: profile.subjectId,
     displayName: profile.displayName,
     summary: profile.summary,
-    profile: profile.profile,
-    topEvidence: summarizeEvidence(profile.topEvidence),
+    bucketCounts: Object.fromEntries(
+      Object.entries(profile.profile).map(([key, values]) => [key, values.length]),
+    ),
+    topEvidence: summarizeEvidence(profile.topEvidence, 3),
     updatedAt: profile.updatedAt,
   });
   return profile;
@@ -270,7 +248,7 @@ export function buildProfileFromEvidence(
   displayName: string,
   evidence: MemoryEvidence[],
 ): MemoryProfile {
-  const sorted = [...evidence].sort((left, right) => {
+  const sortedEvidence = [...evidence].sort((left, right) => {
     const pinScore = Number(right.pinned) - Number(left.pinned);
     if (pinScore !== 0) return pinScore;
     return decayedEvidenceScore(right) - decayedEvidenceScore(left);
@@ -286,23 +264,28 @@ export function buildProfileFromEvidence(
     recent_arc: [] as string[],
   };
 
-  for (const item of sorted) {
+  for (const item of sortedEvidence) {
     const bucket = profile[item.category];
     if (!bucket.includes(item.content) && bucket.length < 3) {
       bucket.push(item.content);
     }
   }
 
-  const summaryParts = [
+  const summaryParts: string[] = [];
+  for (const candidate of [
     profile.identity[0],
     profile.projects[0],
     profile.preferences[0],
     profile.goals[0],
-  ].filter(Boolean);
+  ]) {
+    if (candidate) {
+      summaryParts.push(candidate.trim().replace(/[. ]+$/g, ""));
+    }
+  }
 
   const summary =
     summaryParts.length > 0
-      ? summaryParts.join(". ")
+      ? `${summaryParts.join(". ")}.`
       : `${displayName} has a light profile built from recent conversation.`;
 
   return {
@@ -312,7 +295,7 @@ export function buildProfileFromEvidence(
     displayName,
     summary,
     profile,
-    topEvidence: sorted.slice(0, 6),
+    topEvidence: sortedEvidence.slice(0, 8),
     updatedAt: new Date().toISOString(),
   };
 }
@@ -321,38 +304,25 @@ export async function retrieveProfileMemory(
   guildId: string,
   visibleMessages: VisibleMessage[],
 ) {
-  const userIds = [
+  const recentUserIds = [
     ...new Set(
-      visibleMessages
+      [...visibleMessages]
+        .reverse()
         .filter((message) => !message.fromBot)
         .map((message) => message.authorId),
     ),
-  ];
-  const profiles = await listProfilesForUsers(guildId, userIds);
-  const recentWords = new Set(
-    visibleMessages
-      .slice(-6)
-      .flatMap((message) => relevanceWords(message.content)),
+  ].slice(0, 3);
+  const profiles = await listProfilesForUsers(guildId, recentUserIds);
+  const profilesById = new Map(
+    profiles.map((profile) => [profile.subjectId, profile]),
   );
 
-  return profiles
+  return recentUserIds
+    .map((userId) => profilesById.get(userId))
+    .filter((profile): profile is MemoryProfile => Boolean(profile))
     .map((profile) => ({
-      profile,
-      summary: buildRetrievalSummary(profile, recentWords),
-      score: Math.max(
-        ...Object.entries(profile.profile).flatMap(([category, values]) =>
-          values.map((value) =>
-            scoreMemoryFact(category as MemoryCategory, value, recentWords),
-          ),
-        ),
-        0,
-      ),
-    }))
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 3)
-    .map(({ profile, summary }) => ({
       subject: profile.displayName,
-      summary,
+      summary: buildRetrievalSummary(profile),
     }));
 }
 

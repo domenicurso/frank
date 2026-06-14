@@ -20,7 +20,7 @@ export async function getFrankGuildSettings(
     opportunismLevel: clampInt(config?.opportunismLevel ?? 15, 0, 100),
     reactionsEnabled: config?.reactionsEnabled ?? true,
     burstResponsesEnabled: config?.burstResponsesEnabled ?? true,
-    maxBurstMessages: clampInt(config?.maxBurstMessages ?? 5, 1, 5),
+    maxBurstMessages: clampInt(config?.maxBurstMessages ?? 5, 1, 500),
     cooldownSeconds: clampInt(config?.cooldownDuration ?? 30, 0, 600),
     allowedMentions: config?.allowedMentions ?? true,
     allowedReplies: config?.allowedReplies ?? true,

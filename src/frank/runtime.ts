@@ -11,9 +11,24 @@ export function toVisibleMessage(event: Extract<DiscordEvent, { type: "message_c
     id: event.messageId,
     authorId: event.authorId,
     authorName: event.authorName,
+    authorUsername: event.authorUsername || event.authorName,
     content: event.content,
     mentionsBot: event.mentionsBot,
+    mentionedUsers: event.mentionedUsers,
+    mentionedChannels: event.mentionedChannels,
     replyToMessageId: event.replyToMessageId,
+    replyPreview: event.replyPreview
+      ? {
+          ...event.replyPreview,
+          authorUsername:
+            event.replyPreview.authorUsername || event.replyPreview.authorName,
+        }
+      : null,
+    attachments: event.attachments.map((attachment) => ({
+      name: attachment.name,
+      contentType: attachment.contentType,
+      url: attachment.url,
+    })),
     createdAt: event.createdAt,
     fromBot: false,
   };
@@ -68,6 +83,7 @@ export function markBurstSent(
   sentAt: string,
   botUserId: string,
   botName: string,
+  botUsername: string,
 ): ChannelRuntimeProjection {
   const lastBotMessageId =
     sentMessages[sentMessages.length - 1]?.id ?? runtime.lastBotMessageId;
@@ -77,9 +93,14 @@ export function markBurstSent(
       id: message.id,
       authorId: botUserId,
       authorName: botName,
+      authorUsername: botUsername,
       content: message.text,
       mentionsBot: false,
+      mentionedUsers: [],
+      mentionedChannels: [],
       replyToMessageId: null,
+      replyPreview: null,
+      attachments: [],
       createdAt: message.createdAt,
       fromBot: true,
     })),
@@ -102,6 +123,10 @@ export function markBurstInterrupted(
   remainingChunks: string[],
   interruptedAt: string,
 ): ChannelRuntimeProjection {
+  if (runtime.activeSnapshotId && runtime.activeSnapshotId !== snapshot.id) {
+    return runtime;
+  }
+
   return {
     ...runtime,
     activeJobId: null,
@@ -115,5 +140,20 @@ export function markBurstInterrupted(
             remainingChunks,
           }
         : null,
+  };
+}
+
+export function releasePendingSnapshot(
+  runtime: ChannelRuntimeProjection,
+  snapshotId: string,
+): ChannelRuntimeProjection {
+  if (runtime.activeSnapshotId !== snapshotId) {
+    return runtime;
+  }
+
+  return {
+    ...runtime,
+    activeJobId: null,
+    activeSnapshotId: null,
   };
 }

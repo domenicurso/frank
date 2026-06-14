@@ -1,99 +1,206 @@
 import { client } from "@/client";
-import { FRANK_BURST_SETTLE_MS, FRANK_JOB_POLL_MS } from "@/frank/constants";
+import {
+  FRANK_BACKGROUND_JOB_CLAIM_BATCH,
+  FRANK_BACKGROUND_JOB_STALE_MS,
+  FRANK_BACKGROUND_JOB_TIMEOUT_MS,
+  FRANK_BURST_SETTLE_MS,
+  FRANK_GENERATION_JOB_CLAIM_BATCH,
+  FRANK_GENERATION_JOB_STALE_MS,
+  FRANK_GENERATION_JOB_TIMEOUT_MS,
+  FRANK_JOB_POLL_MS,
+  FRANK_LIVE_JOB_CLAIM_BATCH,
+  FRANK_LIVE_JOB_STALE_MS,
+  FRANK_LIVE_JOB_TIMEOUT_MS,
+} from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
 import { summarizeBurstPlan, summarizeEvent, summarizeRuntime, summarizeSnapshot } from "@/frank/debugView";
-import { executeStreamedBurstPlan, sendChannelTyping } from "@/frank/executor";
+import { executeStreamedBurstPlan } from "@/frank/executor";
+import {
+  isAbortLikeError,
+  normalizeExecutionAbortReason,
+} from "@/frank/executionPolicy";
+import {
+  shouldDelayResponseDecision,
+  shouldSkipStaleResponseDecision,
+} from "@/frank/decisionPolicy";
+import { shouldSkipStaleGenerationSnapshot } from "@/frank/generationPolicy";
 import { getFrankGuildSettings } from "@/frank/config";
 import { extractMemoryFromChannel } from "@/frank/memory";
 import { logError } from "@/log";
-import { applyDiscordEventToRuntime, markBurstInterrupted, markBurstSent } from "@/frank/runtime";
+import {
+  applyDiscordEventToRuntime,
+  markBurstInterrupted,
+  markBurstSent,
+  releasePendingSnapshot,
+} from "@/frank/runtime";
 import { buildResponseSnapshot } from "@/frank/snapshot";
 import {
   appendFrankEvent,
-  claimFrankJobs,
+  claimFrankJobsByType,
   completeFrankJob,
   enqueueFrankJob,
   failFrankJob,
   getChannelRuntime,
   getFrankEventById,
   getFrankJobPayload,
+  releaseStaleFrankJobs,
   saveChannelRuntime,
 } from "@/frank/store";
 import type {
   CharacterGenerationJob,
   DiscordEvent,
+  FrankJobType,
   MemoryExtractionJob,
   ResponseDecisionJob,
   RuntimeUpdateJob,
   SystemEvent,
 } from "@/frank/types";
 
-let workerInterval: NodeJS.Timeout | null = null;
-let isTicking = false;
+type WorkerLane = {
+  name: "live" | "generation" | "background";
+  jobTypes: FrankJobType[];
+  claimBatch: number;
+  timeoutMs: number;
+  staleMs: number;
+};
+
+const WORKER_LANES: WorkerLane[] = [
+  {
+    name: "live",
+    jobTypes: ["runtime_update", "response_decision"],
+    claimBatch: FRANK_LIVE_JOB_CLAIM_BATCH,
+    timeoutMs: FRANK_LIVE_JOB_TIMEOUT_MS,
+    staleMs: FRANK_LIVE_JOB_STALE_MS,
+  },
+  {
+    name: "generation",
+    jobTypes: ["character_generation"],
+    claimBatch: FRANK_GENERATION_JOB_CLAIM_BATCH,
+    timeoutMs: FRANK_GENERATION_JOB_TIMEOUT_MS,
+    staleMs: FRANK_GENERATION_JOB_STALE_MS,
+  },
+  {
+    name: "background",
+    jobTypes: ["memory_extraction"],
+    claimBatch: FRANK_BACKGROUND_JOB_CLAIM_BATCH,
+    timeoutMs: FRANK_BACKGROUND_JOB_TIMEOUT_MS,
+    staleMs: FRANK_BACKGROUND_JOB_STALE_MS,
+  },
+];
+
+const workerIntervals = new Map<WorkerLane["name"], NodeJS.Timeout>();
+const tickingLanes = new Set<WorkerLane["name"]>();
 
 export function startFrankWorker() {
-  if (workerInterval) return;
+  if (workerIntervals.size > 0) return;
 
-  workerInterval = setInterval(() => {
-    void processFrankJobsOnce();
-  }, FRANK_JOB_POLL_MS);
+  for (const lane of WORKER_LANES) {
+    workerIntervals.set(
+      lane.name,
+      setInterval(() => {
+        void processFrankJobsOnce(lane);
+      }, FRANK_JOB_POLL_MS),
+    );
 
-  void processFrankJobsOnce();
+    void processFrankJobsOnce(lane);
+  }
 }
 
 export function stopFrankWorker() {
-  if (workerInterval) clearInterval(workerInterval);
-  workerInterval = null;
+  for (const interval of workerIntervals.values()) {
+    clearInterval(interval);
+  }
+  workerIntervals.clear();
+  tickingLanes.clear();
 }
 
-export async function processFrankJobsOnce() {
-  if (isTicking) return;
-  isTicking = true;
+export async function processFrankJobsOnce(
+  lane: WorkerLane = WORKER_LANES[0]!,
+) {
+  if (tickingLanes.has(lane.name)) return;
+  tickingLanes.add(lane.name);
 
   try {
-    const jobs = await claimFrankJobs(6);
+    await releaseStaleFrankJobs(lane.jobTypes, lane.staleMs);
+    const jobs = await claimFrankJobsByType(lane.claimBatch, lane.jobTypes);
     for (const job of jobs) {
+      const startedAt = Date.now();
       try {
         frankDebug("worker", "job.start", {
           jobId: job.id,
           jobType: job.jobType,
+          lane: lane.name,
           channelId: job.channelId,
           guildId: job.guildId,
         });
-        await processFrankJob(job.id, job.jobType, getFrankJobPayload(job));
+        await runFrankJobWithTimeout(
+          lane,
+          job.jobType,
+          getFrankJobPayload(job),
+        );
         await completeFrankJob(job.id);
         frankDebug("worker", "job.complete", {
+          durationMs: Date.now() - startedAt,
           jobId: job.id,
           jobType: job.jobType,
+          lane: lane.name,
         });
       } catch (error) {
         logError("worker", `Job ${job.id} failed`, error, {
+          durationMs: Date.now() - startedAt,
           jobId: job.id,
           jobType: job.jobType,
+          lane: lane.name,
           channelId: job.channelId,
           guildId: job.guildId,
         });
         frankDebug("worker", "job.error", {
           jobId: job.id,
           jobType: job.jobType,
+          lane: lane.name,
           error,
         });
         await failFrankJob(job.id, error);
       }
     }
   } finally {
-    isTicking = false;
+    tickingLanes.delete(lane.name);
   }
 }
 
-async function processFrankJob(
-  jobId: number,
-  jobType: string,
+async function runFrankJobWithTimeout(
+  lane: WorkerLane,
+  jobType: FrankJobType,
   payload:
     | RuntimeUpdateJob
     | ResponseDecisionJob
     | CharacterGenerationJob
     | MemoryExtractionJob,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort("worker_timeout");
+  }, lane.timeoutMs);
+
+  try {
+    await processFrankJob(jobType, payload, {
+      abortSignal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function processFrankJob(
+  jobType: FrankJobType,
+  payload:
+    | RuntimeUpdateJob
+    | ResponseDecisionJob
+    | CharacterGenerationJob
+    | MemoryExtractionJob,
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
 ) {
   switch (jobType) {
     case "runtime_update":
@@ -103,10 +210,13 @@ async function processFrankJob(
       await handleResponseDecision(payload as ResponseDecisionJob);
       return;
     case "character_generation":
-      await handleCharacterGeneration(payload as CharacterGenerationJob);
+      await handleCharacterGeneration(
+        payload as CharacterGenerationJob,
+        options,
+      );
       return;
     case "memory_extraction":
-      await handleMemoryExtraction(payload as MemoryExtractionJob);
+      await handleMemoryExtraction(payload as MemoryExtractionJob, options);
       return;
     default:
       throw new Error(`Unknown Frank job type: ${jobType}`);
@@ -139,6 +249,35 @@ async function handleResponseDecision(payload: ResponseDecisionJob) {
   const settings = await getFrankGuildSettings(payload.guildId);
   const runtime = await getChannelRuntime(payload.guildId, payload.channelId);
   const sourceEvent = await getFrankEventById(payload.sourceEventId);
+
+  if (shouldDelayResponseDecision(runtime)) {
+    await enqueueFrankJob("response_decision", payload, {
+      queueKey: `decision:${payload.channelId}`,
+      guildId: payload.guildId,
+      channelId: payload.channelId,
+      runAt: new Date(Date.now() + 250),
+    });
+    frankDebug("worker", "response_decision.delayed_active_snapshot", {
+      payload,
+      activeSnapshotId: runtime.activeSnapshotId,
+    });
+    return;
+  }
+
+  if (
+    shouldSkipStaleResponseDecision({
+      runtime,
+      sourceEvent,
+    })
+  ) {
+    frankDebug("worker", "response_decision.skipped_stale", {
+      payload,
+      sourceEvent: summarizeEvent(sourceEvent),
+      runtime: summarizeRuntime(runtime),
+    });
+    return;
+  }
+
   const lastHumanAt = runtime.lastHumanMessageAt
     ? new Date(runtime.lastHumanMessageAt).getTime()
     : 0;
@@ -196,7 +335,6 @@ async function handleResponseDecision(payload: ResponseDecisionJob) {
   runtime.activeSnapshotId = snapshot.id;
   await saveChannelRuntime(runtime);
   const responseDecisionAt = new Date().toISOString();
-  void sendChannelTyping(snapshot.channelId).catch(() => undefined);
 
   await enqueueFrankJob(
     "character_generation",
@@ -209,14 +347,53 @@ async function handleResponseDecision(payload: ResponseDecisionJob) {
   );
 }
 
-async function handleCharacterGeneration(payload: CharacterGenerationJob) {
+async function handleCharacterGeneration(
+  payload: CharacterGenerationJob,
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
+) {
   const settings = await getFrankGuildSettings(payload.snapshot.guildId);
   const runtime = await getChannelRuntime(
     payload.snapshot.guildId,
     payload.snapshot.channelId,
   );
-  runtime.activeSnapshotId = payload.snapshot.id;
-  await saveChannelRuntime(runtime);
+
+  if (
+    shouldSkipStaleGenerationSnapshot({
+      runtime,
+      snapshot: payload.snapshot,
+    })
+  ) {
+    const nextRuntime = releasePendingSnapshot(runtime, payload.snapshot.id);
+    if (nextRuntime !== runtime) {
+      await saveChannelRuntime(nextRuntime);
+    }
+    frankDebug("worker", "character_generation.stale_snapshot", {
+      channelId: payload.snapshot.channelId,
+      snapshotId: payload.snapshot.id,
+      snapshotCreatedAt: payload.snapshot.createdAt,
+      runtime: summarizeRuntime(runtime),
+    });
+    return;
+  }
+
+  if (
+    runtime.activeSnapshotId &&
+    runtime.activeSnapshotId !== payload.snapshot.id
+  ) {
+    frankDebug("worker", "character_generation.superseded", {
+      channelId: payload.snapshot.channelId,
+      snapshotId: payload.snapshot.id,
+      activeSnapshotId: runtime.activeSnapshotId,
+    });
+    return;
+  }
+
+  if (!runtime.activeSnapshotId) {
+    runtime.activeSnapshotId = payload.snapshot.id;
+    await saveChannelRuntime(runtime);
+  }
   frankDebug("worker", "character_generation.input", {
     snapshot: summarizeSnapshot(payload.snapshot),
     settings,
@@ -229,14 +406,17 @@ async function handleCharacterGeneration(payload: CharacterGenerationJob) {
       ? settings.maxBurstMessages
       : 1,
     reactionsEnabled: settings.reactionsEnabled,
+    abortSignal: options.abortSignal,
   }).catch((error) => {
-    if (String(error).includes("aborted")) {
+    if (options.abortSignal?.aborted || isAbortLikeError(error)) {
       return {
         plan: null,
         sentMessageIds: [] as string[],
         sentMessages: [] as Array<{ id: string; text: string; createdAt: string }>,
         aborted: true,
-        reason: "manual_abort" as const,
+        reason: normalizeExecutionAbortReason(
+          options.abortSignal?.reason ?? error,
+        ),
       };
     }
     throw error;
@@ -297,17 +477,26 @@ async function handleCharacterGeneration(payload: CharacterGenerationJob) {
     result.sentMessages,
     new Date().toISOString(),
     client.user?.id ?? "frank",
-    client.user?.displayName ?? client.user?.username ?? "Frank",
+    client.user?.globalName ?? client.user?.username ?? "Frank",
+    client.user?.username ?? "frank",
   );
   await saveChannelRuntime(nextRuntime);
 }
 
-async function handleMemoryExtraction(payload: MemoryExtractionJob) {
+async function handleMemoryExtraction(
+  payload: MemoryExtractionJob,
+  options: {
+    abortSignal?: AbortSignal;
+  } = {},
+) {
   frankDebug("worker", "memory_extraction.input", payload);
   await extractMemoryFromChannel(
     payload.guildId,
     payload.channelId,
     payload.sourceEventId,
+    {
+      abortSignal: options.abortSignal,
+    },
   );
   frankDebug("worker", "memory_extraction.output", payload);
 }

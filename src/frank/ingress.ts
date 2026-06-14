@@ -4,9 +4,20 @@ import {
   FRANK_MEMORY_DEBOUNCE_MS,
 } from "@/frank/constants";
 import { frankDebug } from "@/frank/debug";
-import { interruptChannelExecution } from "@/frank/executor";
+import {
+  getPendingUnsentExecutionSnapshotId,
+  hasPendingUnsentExecution,
+  interruptChannelExecution,
+} from "@/frank/executor";
+import { getIncomingMessageInterruptReason } from "@/frank/ingressPolicy";
 import { getFrankGuildSettings, isFrankChannelAllowed } from "@/frank/config";
-import { appendFrankEvent, enqueueFrankJob } from "@/frank/store";
+import { releasePendingSnapshot } from "@/frank/runtime";
+import {
+  appendFrankEvent,
+  enqueueFrankJob,
+  getChannelRuntime,
+  saveChannelRuntime,
+} from "@/frank/store";
 import type { DiscordEvent } from "@/frank/types";
 import type {
   Message,
@@ -75,6 +86,88 @@ function hasDirectNameMention(message: Message) {
   return false;
 }
 
+function collectMentionedUsers(message: Message) {
+  return [...message.mentions.users.values()].map((user) => ({
+    id: user.id,
+    username: user.username,
+    displayName:
+      message.mentions.members?.get(user.id)?.displayName ||
+      user.globalName ||
+      user.username,
+  }));
+}
+
+function collectMentionedChannels(message: Message) {
+  return [...message.mentions.channels.values()].map((channel) => ({
+    id: channel.id,
+    name: "name" in channel && typeof channel.name === "string"
+      ? channel.name
+      : channel.id,
+  }));
+}
+
+function collectReplyPreview(message: Message) {
+  const replyToMessageId = message.reference?.messageId;
+  if (!replyToMessageId || !("messages" in message.channel)) {
+    return null;
+  }
+
+  const replied = message.channel.messages.cache.get(replyToMessageId);
+  if (!replied) {
+    return null;
+  }
+
+  return {
+    authorName: replied.member?.displayName || replied.author.username,
+    authorUsername: replied.author.username,
+    content: replied.content,
+  };
+}
+
+function collectMediaAttachments(message: Message) {
+  const media = [...message.attachments.values()].map((attachment) => ({
+    name: attachment.name ?? "attachment",
+    url: attachment.url,
+    contentType: attachment.contentType ?? "unknown",
+  }));
+
+  for (const [index, embed] of message.embeds.entries()) {
+    const imageUrl = embed.image?.url ?? embed.thumbnail?.url ?? null;
+    if (imageUrl) {
+      media.push({
+        name: embed.title || `embed-image-${index + 1}`,
+        url: imageUrl,
+        contentType: guessMediaTypeFromUrl(imageUrl),
+      });
+    }
+
+    const videoUrl = embed.video?.url ?? null;
+    if (videoUrl) {
+      media.push({
+        name: embed.title || `embed-video-${index + 1}`,
+        url: videoUrl,
+        contentType: guessMediaTypeFromUrl(videoUrl),
+      });
+    }
+  }
+
+  const byUrl = new Map<string, (typeof media)[number]>();
+  for (const item of media) {
+    byUrl.set(item.url, item);
+  }
+  return [...byUrl.values()];
+}
+
+function guessMediaTypeFromUrl(url: string) {
+  const lower = url.toLowerCase();
+  if (lower.includes(".gif")) return "image/gif";
+  if (lower.includes(".png")) return "image/png";
+  if (lower.includes(".jpg") || lower.includes(".jpeg")) return "image/jpeg";
+  if (lower.includes(".webp")) return "image/webp";
+  if (lower.includes(".mp4")) return "video/mp4";
+  return "unknown";
+}
+
 function getIngressSettleMs(message: Message, mentionsBot: boolean) {
   if (mentionsBot) {
     return 250;
@@ -85,6 +178,17 @@ function getIngressSettleMs(message: Message, mentionsBot: boolean) {
   }
 
   return FRANK_BURST_SETTLE_MS;
+}
+
+function getInterruptReasonForMessage(
+  message: Message,
+  mentionsBot: boolean,
+) {
+  return getIncomingMessageInterruptReason({
+    mentionsBot,
+    repliesToBot: message.mentions.repliedUser?.id === client.user?.id,
+    hasPendingUnsentExecution: hasPendingUnsentExecution(message.channel.id),
+  });
 }
 
 function shouldScheduleMemoryExtraction(
@@ -178,6 +282,11 @@ export async function ingestMessageCreate(message: Message) {
     message.mentions.users.has(client.user?.id ?? "") || hasDirectNameMention(message);
   const settleMs = getIngressSettleMs(message, mentionsBot);
   const shouldExtractMemory = shouldScheduleMemoryExtraction(message, mentionsBot);
+  const interruptReason = getInterruptReasonForMessage(message, mentionsBot);
+  const mentionedUsers = collectMentionedUsers(message);
+  const mentionedChannels = collectMentionedChannels(message);
+  const replyPreview = collectReplyPreview(message);
+  const attachments = collectMediaAttachments(message);
 
   const event: DiscordEvent = {
     type: "message_create",
@@ -187,16 +296,16 @@ export async function ingestMessageCreate(message: Message) {
     messageId: message.id,
     authorId: message.author.id,
     authorName: message.member?.displayName || message.author.username,
+    authorUsername: message.author.username,
     content: message.content,
     mentionsBot,
     mentionsUserIds: [...message.mentions.users.keys()],
+    mentionedUsers,
+    mentionedChannels,
     replyToMessageId: message.reference?.messageId ?? null,
+    replyPreview,
     createdAt: message.createdAt.toISOString(),
-    attachments: [...message.attachments.values()].map((attachment) => ({
-      name: attachment.name ?? "attachment",
-      url: attachment.url,
-      contentType: attachment.contentType ?? "unknown",
-    })),
+    attachments,
   };
 
   frankDebug("ingress", "message_create.input", {
@@ -206,11 +315,33 @@ export async function ingestMessageCreate(message: Message) {
     authorId: message.author.id,
     content: message.content,
     mentionsBot,
+    mentionedUsers,
+    mentionedChannels,
     replyToMessageId: message.reference?.messageId ?? null,
+    replyPreview,
   });
 
   const eventId = await appendFrankEvent(event);
-  interruptChannelExecution(message.channel.id, "new_direct_message");
+  if (interruptReason) {
+    const pendingSnapshotId =
+      interruptReason === "channel_shift"
+        ? getPendingUnsentExecutionSnapshotId(message.channel.id)
+        : null;
+    interruptChannelExecution(message.channel.id, interruptReason);
+    if (pendingSnapshotId) {
+      const runtime = await getChannelRuntime(message.guild.id, message.channel.id);
+      const nextRuntime = releasePendingSnapshot(runtime, pendingSnapshotId);
+      if (nextRuntime !== runtime) {
+        await saveChannelRuntime(nextRuntime);
+        frankDebug("ingress", "released_pending_snapshot", {
+          channelId: message.channel.id,
+          guildId: message.guild.id,
+          snapshotId: pendingSnapshotId,
+          reason: interruptReason,
+        });
+      }
+    }
+  }
 
   await enqueueFrankJob("runtime_update", { eventId }, {
     queueKey: `runtime:${eventId}`,
@@ -250,6 +381,7 @@ export async function ingestMessageCreate(message: Message) {
 
   frankDebug("ingress", "message_create.output", {
     eventId,
+    interruptReason,
     scheduledJobs: [
       "runtime_update",
       "response_decision",
